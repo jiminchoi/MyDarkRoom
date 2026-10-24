@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MyDarkRoom · 나만의 작은 암실</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" type="module"></script>
+</head>
+<body>
+  <header>
+    <a class="brand" href="/" aria-label="MyDarkRoom 홈"><span class="mark">◒</span> MyDarkRoom<span class="tag">나만의 작은 암실</span></a>
+    <div class="actions">
+      <button id="open">NEF 열기 <kbd>O</kbd></button>
+      <button id="export" class="primary" disabled>JPEG 저장 <span>↗</span></button>
+    </div>
+  </header>
+  <main>
+    <section class="workspace" id="drop-zone" aria-label="사진 미리보기">
+      <div class="photo-info"><span id="filename">아직 불러온 사진이 없어요</span><span id="dimensions">NEF 전용</span></div>
+      <div class="canvas" id="canvas">
+        <div id="empty">
+          <div class="empty-icon">◩</div>
+          <p class="eyebrow">LESS FUSS. MORE PHOTOS.</p>
+          <h1>오늘의 사진을 꺼내볼까요?</h1>
+          <p>니콘 NEF를 여기에 놓아주세요.<br>가볍게 다듬고, 마음에 드는 순간을 JPEG로.</p>
+          <button class="primary" id="choose">사진 선택하기 <span>+</span></button>
+          <small>원본 파일은 그대로 보관됩니다</small>
+        </div>
+        <canvas id="preview" aria-label="보정 중인 사진" hidden></canvas>
+        <div id="split-line" hidden><span>보정 전</span><span>보정 후</span></div>
+        <span id="compare-label" hidden>보정 전</span>
+        <div id="busy" role="status" hidden><span class="spinner"></span><span id="busy-text">사진을 현상하고 있어요</span></div>
+      </div>
+      <div class="view-tools">
+        <div class="zoom-tools" role="group" aria-label="확대"><button id="fit" aria-pressed="true" disabled>화면 맞춤</button><button id="zoom" aria-pressed="false" disabled>100%</button></div>
+        <span id="renderer-mode">GPU 확인 중</span>
+        <button id="split" aria-pressed="false" disabled>전후 나눠 보기</button>
+      </div>
+      <label id="split-control" hidden>전후 경계 <input id="split-position" type="range" min="0" max="100" value="50"></label>
+      <footer><span><i class="dot"></i> <span id="status" role="status">사진을 기다리고 있어요</span></span><button id="compare" disabled>누르고 보정 전 보기</button></footer>
+    </section>
+    <aside aria-label="보정 도구">
+      <div class="panel-heading"><div><p class="eyebrow">A LITTLE FINISHING TOUCH</p><h2>사진 다듬기</h2></div><button id="reset" class="text-button" disabled>초기화 ↺</button></div>
+      <section class="histogram-panel" aria-label="RGB 히스토그램"><div class="histogram-heading"><h3>히스토그램 <span>RGB</span></h3><span id="histogram-info">보정 후 · 전체 사진</span></div><canvas id="histogram" width="512" height="180" aria-label="보정 후 전체 미리보기의 RGB 밝기 분포"></canvas><div class="histogram-axis"><span>0 · 어두움</span><span>밝음 · 255</span></div><p id="histogram-count" role="status">사진을 열면 표시됩니다</p></section>
+      <fieldset id="controls" disabled>
+        <legend class="sr-only">기본 보정</legend>
+        <div class="control-group"><h3>빛 <span>LIGHT</span></h3>
+          <label>노출 <output for="exposure">0.00</output><input id="exposure" type="range" min="-3" max="3" step="0.05" value="0"></label>
+          <label>대비 <output for="contrast">0</output><input id="contrast" type="range" min="-100" max="100" value="0"></label>
+          <label>하이라이트 <output for="highlights">0</output><input id="highlights" type="range" min="-100" max="100" value="0"></label>
+          <label>그림자 <output for="shadows">0</output><input id="shadows" type="range" min="-100" max="100" value="0"></label>
+        </div>
+        <div class="control-group"><h3>색 <span>COLOR</span></h3>
+          <label>색온도 <output for="temperature">0</output><input id="temperature" class="temperature" type="range" min="-100" max="100" value="0"><span class="range-hints"><span>차갑게</span><span>따뜻하게</span></span></label>
+          <label>틴트 <output for="tint">0</output><input id="tint" class="tint" type="range" min="-100" max="100" value="0"></label>
+          <label>채도 <output for="saturation">0</output><input id="saturation" type="range" min="-100" max="100" value="0"></label>
+        </div>
+      </fieldset>
+      <div class="note"><span>✳</span><p>약 400만 화소로 가볍게.<br>100%에서 드래그해 디테일을 확인하세요.</p></div>
+      <div class="engine" id="engine">RAW ENGINE · LibRaw</div>
+    </aside>
+  </main>
+  <input type="file" id="file" accept=".nef,.NEF" hidden>
+  <div id="error" role="alert" hidden><span id="error-text"></span><button id="dismiss" aria-label="알림 닫기">×</button></div>
+</body>
+</html>

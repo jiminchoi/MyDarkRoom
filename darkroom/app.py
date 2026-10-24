@@ -1,0 +1,210 @@
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import threading
+import time
+from uuid import uuid4
+
+import numpy as np
+import rawpy
+from fastapi import FastAPI, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
+
+from .imaging import Adjustments, develop, jpeg
+
+STATIC = Path(__file__).parent / "static"
+MAX_UPLOAD = 256 * 1024 * 1024
+MAX_SESSIONS = 3
+
+
+@dataclass
+class Photo:
+    path: Path
+    filename: str
+    preview: np.ndarray
+    touched: float
+    width: int
+    height: int
+
+
+class Studio:
+    def __init__(self, directory: Path):
+        self.directory = directory
+        self.photos: dict[str, Photo] = {}
+        # Serialize LibRaw work and protect against eviction during export.
+        self.lock = threading.Lock()
+
+    def open(self, path: Path, filename: str) -> dict:
+        with self.lock:
+            try:
+                metadata = {}
+                preview = develop(path, preview=True, metadata=metadata)
+            except (rawpy.LibRawError, ValueError) as exc:
+                raise HTTPException(422, "이 NEF를 읽을 수 없습니다. 파일 손상 또는 미지원 카메라/압축 형식일 수 있습니다.") from exc
+            while len(self.photos) >= MAX_SESSIONS:
+                oldest = min(self.photos, key=lambda key: self.photos[key].touched)
+                self.remove(oldest)
+            photo_id = uuid4().hex
+            width = metadata.get("width", preview.shape[1])
+            height = metadata.get("height", preview.shape[0])
+            self.photos[photo_id] = Photo(path, filename, preview, time.monotonic(), width, height)
+            return {"id": photo_id, "filename": filename,
+                    "width": width, "height": height,
+                    "preview_width": preview.shape[1], "preview_height": preview.shape[0]}
+
+    def remove(self, photo_id: str):
+        photo = self.photos.pop(photo_id)
+        photo.path.unlink(missing_ok=True)
+        photo.path.with_suffix(".npy").unlink(missing_ok=True)
+
+    def get(self, photo_id: str) -> Photo:
+        photo = self.photos.get(photo_id)
+        if photo is None:
+            raise HTTPException(404, "사진 세션이 만료되었습니다. NEF를 다시 열어 주세요.")
+        photo.touched = time.monotonic()
+        return photo
+
+    def full(self, photo: Photo) -> np.ndarray:
+        cache = photo.path.with_suffix(".npy")
+        if not cache.exists():
+            # Keep at most one full-resolution disk cache across all sessions.
+            for other in self.photos.values():
+                other.path.with_suffix(".npy").unlink(missing_ok=True)
+            pending = cache.with_suffix(".pending")
+            try:
+                rgb = develop(photo.path, preview=False)
+                with pending.open("wb") as output:
+                    np.save(output, rgb, allow_pickle=False)
+                del rgb
+                pending.replace(cache)
+            finally:
+                pending.unlink(missing_ok=True)
+        return np.load(cache, mmap_mode="r", allow_pickle=False)
+
+    def pixels(self, photo_id: str, region: tuple | None = None, settings: Adjustments | None = None):
+        with self.lock:
+            photo = self.get(photo_id)
+            x = y = 0
+            try:
+                rgb = photo.preview
+                if region is not None:
+                    x, y, width, height = region
+                    if x >= photo.width or y >= photo.height:
+                        raise HTTPException(422, "사진 범위를 벗어난 위치입니다.")
+                    rgb = self.full(photo)[y:y + height, x:x + width]
+                height, width = rgb.shape[:2]
+                headers = {"X-Image-Width": str(width), "X-Image-Height": str(height),
+                           "X-Image-X": str(x), "X-Image-Y": str(y)}
+                if settings is not None:
+                    return jpeg(rgb, settings, quality=95), headers
+                return rgb.astype("<u2", copy=False).tobytes(), headers
+            except (rawpy.LibRawError, ValueError) as exc:
+                raise HTTPException(422, "원본 해상도 미리보기를 만들 수 없습니다.") from exc
+
+    def image(self, photo_id: str, settings: Adjustments, *, full: bool) -> bytes:
+        with self.lock:
+            photo = self.get(photo_id)
+            try:
+                rgb = self.full(photo) if full else photo.preview
+                return jpeg(rgb, settings, quality=95 if full else 85)
+            except (rawpy.LibRawError, ValueError) as exc:
+                raise HTTPException(422, "RAW 현상에 실패했습니다. 다른 NEF 파일을 확인해 주세요.") from exc
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    with TemporaryDirectory(prefix="mydarkroom-") as directory:
+        app.state.studio = Studio(Path(directory))
+        yield
+
+
+app = FastAPI(title="MyDarkRoom", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def local_requests(request: Request, call_next):
+    # A local personal tool: reject cross-origin browser mutation requests.
+    origin = request.headers.get("origin")
+    if request.method not in {"GET", "HEAD"} and origin and origin != str(request.base_url).rstrip("/"):
+        return Response("Cross-origin requests are disabled", status_code=403)
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.get("/")
+def index():
+    return FileResponse(STATIC / "index.html")
+
+
+@app.get("/api/health")
+def health():
+    return {"status": "ok", "rawpy": rawpy.__version__, "libraw": ".".join(map(str, rawpy.libraw_version))}
+
+
+@app.post("/api/photos")
+async def upload(request: Request, file: UploadFile):
+    path = request.app.state.studio.directory / f"{uuid4().hex}.nef"
+    accepted = False
+    try:
+        filename = (file.filename or "photo.nef").replace("\\", "/").rsplit("/", 1)[-1]
+        if not filename.lower().endswith(".nef"):
+            raise HTTPException(415, "NEF 파일만 열 수 있습니다.")
+        total = 0
+        with path.open("xb") as output:
+            while chunk := await file.read(1024 * 1024):
+                total += len(chunk)
+                if total > MAX_UPLOAD:
+                    raise HTTPException(413, "사진 한 장의 최대 크기는 256 MB입니다.")
+                output.write(chunk)
+        if total == 0:
+            raise HTTPException(422, "빈 파일입니다.")
+        result = await run_in_threadpool(request.app.state.studio.open, path, filename)
+        accepted = True
+        return result
+    finally:
+        await file.close()
+        if not accepted:
+            path.unlink(missing_ok=True)
+
+
+@app.post("/api/photos/{photo_id}/preview")
+def preview(photo_id: str, settings: Adjustments, request: Request):
+    data = request.app.state.studio.image(photo_id, settings, full=False)
+    return Response(data, media_type="image/jpeg")
+
+
+@app.post("/api/photos/{photo_id}/export")
+def export(photo_id: str, settings: Adjustments, request: Request):
+    data = request.app.state.studio.image(photo_id, settings, full=True)
+    return Response(data, media_type="image/jpeg",
+                    headers={"Content-Disposition": 'attachment; filename="mydarkroom.jpg"'})
+
+
+@app.get("/api/photos/{photo_id}/pixels")
+def pixels(photo_id: str, request: Request):
+    data, headers = request.app.state.studio.pixels(photo_id)
+    return Response(data, media_type="application/octet-stream", headers=headers)
+
+
+@app.get("/api/photos/{photo_id}/detail")
+def detail(photo_id: str, request: Request, x: int = Query(ge=0), y: int = Query(ge=0),
+           width: int = Query(ge=1, le=4096), height: int = Query(ge=1, le=4096)):
+    data, headers = request.app.state.studio.pixels(photo_id, (x, y, width, height))
+    return Response(data, media_type="application/octet-stream", headers=headers)
+
+
+@app.post("/api/photos/{photo_id}/detail")
+def detail_cpu(photo_id: str, settings: Adjustments, request: Request,
+               x: int = Query(ge=0), y: int = Query(ge=0),
+               width: int = Query(ge=1, le=4096), height: int = Query(ge=1, le=4096)):
+    data, headers = request.app.state.studio.pixels(photo_id, (x, y, width, height), settings)
+    return Response(data, media_type="image/jpeg", headers=headers)
+
+
+app.mount("/static", StaticFiles(directory=STATIC), name="static")
