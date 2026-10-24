@@ -320,7 +320,7 @@ document.addEventListener("keydown",(event) => {
   if (event.key.toLowerCase() === "o" && !opening && !exporting) $("file").click();
   if (event.key === "1") setMode("zoom"); if (event.key.toLowerCase() === "f") setMode("fit");
 });
-fetch("/api/health").then(checked).then((r) => r.json()).then((data) => {$("engine").textContent=`RAW ENGINE · LibRaw ${data.libraw}`;}).catch(() => error("서버에 연결할 수 없어요. 실행 상태를 확인해 주세요."));
+fetch("/api/health").then(checked).then((r) => r.json()).then((data) => {$("engine").textContent=`MyDarkRoom ${data.app_version || ""} · LibRaw ${data.libraw} · DNG ${data.dng_converter ? "감지됨" : "없음"}`;}).catch(() => error("서버에 연결할 수 없어요. 실행 상태를 확인해 주세요."));
 
 let history=[], historyIndex=-1;
 const storageKey="mydarkroom.presets.v1";

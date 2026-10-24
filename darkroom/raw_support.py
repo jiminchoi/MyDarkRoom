@@ -6,6 +6,7 @@ import subprocess
 from tempfile import TemporaryDirectory
 
 import rawpy
+import re
 
 
 class RawCompatibilityError(ValueError):
@@ -58,32 +59,42 @@ def compatible_develop(path, native, *, preview, metadata):
     converted=path.with_suffix(".dng")
     if converted.exists():
         return native(converted,preview=preview,metadata=metadata)
+    model=camera_model(path)
+    known_z5ii=re.sub(r"[^A-Z0-9]","",model.upper()) in {"NIKONZ52","NIKONZ5II","Z52","Z5II"}
+    converter=converter_path()
+    if known_z5ii and converter:
+        return convert_develop(path,native,converter,preview=preview,metadata=metadata)
     try:
         return native(path,preview=preview,metadata=metadata)
-    except (rawpy.LibRawFileUnsupportedError,rawpy.LibRawNotImplementedError) as exc:
-        model=camera_model(path)
-        converter=converter_path()
+    except (rawpy.LibRawFileUnsupportedError,rawpy.LibRawNotImplementedError,rawpy.LibRawDataError,ValueError) as exc:
+        if not isinstance(exc,(rawpy.LibRawFileUnsupportedError,rawpy.LibRawNotImplementedError)) and not known_z5ii:
+            raise
         if not converter:
             raise RawCompatibilityError(
-                f"{model or '이 NEF'}는 현재 RAW 엔진에서 지원되지 않습니다. "
-                "Nikon Z5 II 등 최신 기종 또는 HE/HE★ 압축일 수 있습니다. "
-                "Windows용 최신 Adobe DNG Converter를 공식 사이트에서 설치한 뒤 앱을 다시 실행하세요. "
-                "이미 설치했다면 MYDARKROOM_DNG_CONVERTER에 실행 파일 경로를 지정하세요. "
+                f"{model or '이 NEF'}를 RAW 엔진에서 읽지 못했습니다 ({type(exc).__name__}). "
+                "Z5 II 또는 HE/HE★ 압축은 최신 Adobe DNG Converter가 필요합니다. "
+                "기본 위치에 설치하고 앱을 다시 실행하세요. 이미 설치했다면 "
+                "MYDARKROOM_DNG_CONVERTER에 실행 파일 경로를 지정하세요. "
                 f"LibRaw {'.'.join(map(str,rawpy.libraw_version))}.") from exc
-        with TemporaryDirectory(prefix="dng-",dir=path.parent) as directory:
-            try:
-                result=subprocess.run([str(converter),"-c","-d",directory,str(path.resolve())],
-                    stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=180,
-                    creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
-            except (OSError,subprocess.TimeoutExpired) as error:
-                raise RawCompatibilityError("Adobe DNG 변환기를 실행하지 못했습니다. 설치 경로와 최신 버전을 확인하세요.") from error
-            files=[p for p in Path(directory).iterdir() if p.suffix.lower()==".dng"]
-            if result.returncode or len(files)!=1:
-                raise RawCompatibilityError("Adobe DNG 변환에 실패했습니다. 최신 변환기가 해당 기종/압축을 지원하는지 확인하세요.")
-            try:
-                rgb=native(files[0],preview=preview,metadata=metadata)
-            except rawpy.LibRawError as error:
-                raise RawCompatibilityError("변환된 DNG를 현상하지 못했습니다. 원본 파일과 DNG Converter 버전을 확인하세요.") from error
-            files[0].replace(converted)
-            if metadata is not None:metadata["decoder"]="Adobe DNG → LibRaw"
-            return rgb
+        return convert_develop(path,native,converter,preview=preview,metadata=metadata)
+
+
+def convert_develop(path,native,converter,*,preview,metadata):
+    converted=path.with_suffix(".dng")
+    with TemporaryDirectory(prefix="dng-",dir=path.parent) as directory:
+        try:
+            result=subprocess.run([str(converter),"-c","-d",directory,str(path.resolve())],
+                stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=180,
+                creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
+        except (OSError,subprocess.TimeoutExpired) as error:
+            raise RawCompatibilityError("Adobe DNG 변환기를 실행하지 못했습니다. 설치 경로와 최신 버전을 확인하세요.") from error
+        files=[p for p in Path(directory).iterdir() if p.suffix.lower()==".dng"]
+        if result.returncode or len(files)!=1:
+            raise RawCompatibilityError("Adobe DNG 변환에 실패했습니다. 최신 변환기가 해당 기종/압축을 지원하는지 확인하세요.")
+        try:
+            rgb=native(files[0],preview=preview,metadata=metadata)
+        except rawpy.LibRawError as error:
+            raise RawCompatibilityError("변환된 DNG를 현상하지 못했습니다. 원본 파일과 DNG Converter 버전을 확인하세요.") from error
+        files[0].replace(converted)
+        if metadata is not None:metadata["decoder"]="Adobe DNG → LibRaw"
+        return rgb

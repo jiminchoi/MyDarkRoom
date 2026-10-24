@@ -79,6 +79,24 @@ def test_bounded_camera_model_reader(tmp_path):
     assert camera_model(path)=="NIKON Z5_2"
 
 
+def test_z5ii_prefers_converter_without_attempting_native_nef(tmp_path,monkeypatch):
+    from darkroom import raw_support
+    path=tmp_path/"camera.nef";path.write_bytes(b"fixture")
+    monkeypatch.setattr(raw_support,"camera_model",lambda p:"NIKON Z5_2")
+    monkeypatch.setattr(raw_support,"converter_path",lambda:Path("converter.exe"))
+    calls=[]
+    def native(source,**kwargs):
+        calls.append(source.suffix)
+        assert source.suffix==".dng"
+        return np.zeros((2,2,3),dtype=np.uint16)
+    def convert(command,**kwargs):
+        (Path(command[3])/"camera.dng").write_bytes(b"converted")
+        return subprocess.CompletedProcess(command,0)
+    monkeypatch.setattr(raw_support.subprocess,"run",convert)
+    compatible_develop(path,native,preview=True,metadata={})
+    assert calls==[".dng"]
+
+
 def test_export_api_and_photo_close_release_files(monkeypatch):
     def develop(path,*,preview,metadata=None):
         if metadata is not None:metadata.update(width=300,height=200)

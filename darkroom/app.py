@@ -49,7 +49,7 @@ class Studio:
             except RawCompatibilityError as exc:
                 raise HTTPException(422,str(exc)) from exc
             except (rawpy.LibRawError, ValueError) as exc:
-                raise HTTPException(422, "이 NEF를 읽을 수 없습니다. 파일 손상 또는 미지원 카메라/압축 형식일 수 있습니다.") from exc
+                raise HTTPException(422, f"NEF 로딩 실패 ({type(exc).__name__}): {str(exc)[:200]}. 파일 또는 RAW 엔진 지원 범위를 확인하세요.") from exc
             while len(self.photos) >= MAX_SESSIONS:
                 oldest = min(self.photos, key=lambda key: self.photos[key].touched)
                 self.remove(oldest)
@@ -181,7 +181,7 @@ def index():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "rawpy": rawpy.__version__, "libraw": ".".join(map(str, rawpy.libraw_version)),"dng_converter":bool(converter_path())}
+    return {"status": "ok", "rawpy": rawpy.__version__, "libraw": ".".join(map(str, rawpy.libraw_version)),"dng_converter":bool(converter_path()),"app_version":"0.5.1"}
 
 
 @app.post("/api/photos")
