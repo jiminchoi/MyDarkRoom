@@ -8,6 +8,8 @@ precision highp float;
 precision highp usampler2D;
 uniform usampler2D source;
 uniform usampler2D detail;
+uniform usampler2D maskedSource, maskedDetail;
+uniform bool hasMaskedSource, hasMaskedDetail;
 uniform vec2 outputSize, fullSize, offset, origin, detailOrigin;
 uniform float scale, splitPosition;
 uniform bool hasDetail, before, split, histogram;
@@ -33,12 +35,13 @@ void main() {
   if (any(lessThan(p,vec2(0))) || any(greaterThanEqual(p,fullSize))) {
     result=vec4(vec3(16.,18.,18.)/255.,1.); return;
   }
-  vec3 x = sample16(source, p/fullSize);
+  bool original = !histogram && (before || (split && screen.x < outputSize.x*splitPosition));
+  vec3 x = hasMaskedSource && !original ? sample16(maskedSource,p/fullSize) : sample16(source, p/fullSize);
   vec2 dp = p-detailOrigin;
   if (hasDetail && !histogram && all(greaterThanEqual(dp,vec2(0))) && all(lessThan(dp,vec2(textureSize(detail,0))))) {
     x = sample16(detail, dp/vec2(textureSize(detail,0)));
+    if (hasMaskedDetail && !original) x=sample16(maskedDetail, dp/vec2(textureSize(detail,0)));
   }
-  bool original = !histogram && (before || (split && screen.x < outputSize.x*splitPosition));
   vec4 l = original ? vec4(0) : light;
   vec3 c = original ? vec3(0) : color;
   float warmth = c.x/100., tint = c.y/100.;
@@ -91,8 +94,9 @@ export class GpuRenderer {
     const position = gl.getAttribLocation(this.program, "position");
     gl.enableVertexAttribArray(position); gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
     this.locations = {};
-    for (const name of ["source","detail","outputSize","fullSize","offset","origin","detailOrigin","scale","splitPosition","hasDetail","before","split","histogram","light","color","monochrome","mixer","tone","toneAmount","grain","grainSize"]) this.locations[name] = gl.getUniformLocation(this.program, name);
+    for (const name of ["source","detail","outputSize","fullSize","offset","origin","detailOrigin","scale","splitPosition","hasDetail","before","split","histogram","light","color","monochrome","mixer","tone","toneAmount","grain","grainSize","maskedSource","maskedDetail","hasMaskedSource","hasMaskedDetail"]) this.locations[name] = gl.getUniformLocation(this.program, name);
     gl.uniform1i(this.locations.source, 0); gl.uniform1i(this.locations.detail, 1);
+    gl.uniform1i(this.locations.maskedSource,2);gl.uniform1i(this.locations.maskedDetail,3);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     this.detailTexture = null; this.texture = null; this.target = null;
   }
@@ -113,12 +117,16 @@ export class GpuRenderer {
     this.gl.deleteTexture(this.texture); this.texture = next;
     this.photo = photo; this.width = data.width; this.height = data.height;
     this.clearDetail();
+    this.clearMasked();
     if (this.target) { this.gl.deleteFramebuffer(this.target.framebuffer); this.gl.deleteTexture(this.target.texture); this.target = null; }
   }
-  clearDetail() { this.gl.deleteTexture(this.detailTexture); this.detailTexture = null; }
-  loadDetail(data) {
+  clearMasked() {this.gl.deleteTexture(this.maskedTexture);this.maskedTexture=null;this.gl.deleteTexture(this.maskedDetailTexture);this.maskedDetailTexture=null;}
+  loadMasked(data) {const next=this.upload(data);this.gl.deleteTexture(this.maskedTexture);this.maskedTexture=next;}
+  clearDetail() { this.gl.deleteTexture(this.detailTexture); this.detailTexture = null;this.gl.deleteTexture(this.maskedDetailTexture);this.maskedDetailTexture=null; }
+  loadDetail(data,masked=null) {
     const texture = this.upload(data);
     this.clearDetail(); this.detailTexture = texture; this.detailOrigin = [data.x, data.y];
+    if (masked) this.maskedDetailTexture=this.upload(masked);
   }
   draw(settings, view, { before = false, split = false, splitPosition = .5, histogram = false } = {}) {
     if (!this.texture) return;
@@ -127,6 +135,9 @@ export class GpuRenderer {
     gl.useProgram(this.program); gl.viewport(0,0,width,height);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,this.texture);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D,this.detailTexture || this.texture);
+    gl.activeTexture(gl.TEXTURE2);gl.bindTexture(gl.TEXTURE_2D,this.maskedTexture || this.texture);
+    gl.activeTexture(gl.TEXTURE3);gl.bindTexture(gl.TEXTURE_2D,this.maskedDetailTexture || this.detailTexture || this.texture);
+    gl.uniform1i(u.hasMaskedSource,Boolean(this.maskedTexture));gl.uniform1i(u.hasMaskedDetail,Boolean(this.maskedDetailTexture));
     gl.uniform2f(u.outputSize,width,height); gl.uniform2f(u.fullSize,this.photo.width,this.photo.height);
     gl.uniform2fv(u.offset,view.offset); gl.uniform2fv(u.origin,view.origin);
     gl.uniform2fv(u.detailOrigin,this.detailOrigin || [0,0]); gl.uniform1f(u.scale,view.scale);

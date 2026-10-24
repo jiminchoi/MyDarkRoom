@@ -6,6 +6,7 @@ import numpy as np
 import rawpy
 from PIL import Image, ImageCms
 from pydantic import BaseModel, ConfigDict, Field
+from .masking import Mask, bake_masks
 
 
 class Adjustments(BaseModel):
@@ -25,6 +26,7 @@ class Adjustments(BaseModel):
     tone_amount: float = Field(default=0, ge=0, le=100)
     grain: float = Field(default=0, ge=0, le=100)
     grain_size: float = Field(default=1, ge=1, le=8)
+    masks: list[Mask] = Field(default_factory=list, max_length=8)
 
 
 SRGB_PROFILE = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
@@ -68,8 +70,9 @@ def develop(path: Path, *, preview: bool, metadata: dict | None = None) -> np.nd
     return resize_preview(rgb) if preview else rgb
 
 
-def render(rgb: np.ndarray, settings: Adjustments, *, origin=(0, 0), pixel_scale=(1, 1)) -> Image.Image:
+def render(rgb: np.ndarray, settings: Adjustments, *, origin=(0, 0), pixel_scale=(1, 1), full_size=None) -> Image.Image:
     """Shared preview/export pipeline; process strips to bound temporary memory."""
+    rgb = bake_masks(rgb,settings.masks,origin=origin,pixel_scale=pixel_scale,full_size=full_size)
     result = np.empty(rgb.shape, dtype=np.uint8)
     warmth = settings.temperature / 100
     tint = settings.tint / 100
@@ -113,8 +116,8 @@ def render(rgb: np.ndarray, settings: Adjustments, *, origin=(0, 0), pixel_scale
     return Image.fromarray(result)
 
 
-def jpeg(rgb: np.ndarray, settings: Adjustments, *, quality: int, origin=(0,0), pixel_scale=(1,1)) -> bytes:
+def jpeg(rgb: np.ndarray, settings: Adjustments, *, quality: int, origin=(0,0), pixel_scale=(1,1), full_size=None) -> bytes:
     output = BytesIO()
-    render(rgb, settings, origin=origin, pixel_scale=pixel_scale).save(output, format="JPEG", quality=quality,
+    render(rgb, settings, origin=origin, pixel_scale=pixel_scale,full_size=full_size).save(output, format="JPEG", quality=quality,
                                subsampling=0, icc_profile=SRGB_PROFILE)
     return output.getvalue()

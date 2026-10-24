@@ -1,9 +1,12 @@
 import { GpuRenderer } from "./gpu.js";
+import { MaskEditor } from "./masks.js";
+let maskEditor, maskBusy=false, appliedMaskKey="[]", maskTimer, maskGeneration=0, maskAbort;
+let overlayTimer, overlayGeneration=0, overlayAbort, overlayKey="";
 
 const $ = (id) => document.getElementById(id);
 const inputs = [...document.querySelectorAll('#controls input[type="range"]')];
 const defaults = {...Object.fromEntries(inputs.map((input) => [input.id, Number(input.defaultValue)])), monochrome:false};
-const settings = () => ({...Object.fromEntries(inputs.map((input) => [input.id, Number(input.value)])), monochrome:$("monochrome").checked});
+const settings = () => ({...Object.fromEntries(inputs.map((input) => [input.id, Number(input.value)])), monochrome:$("monochrome").checked,masks:maskEditor?.masks || []});
 let canvas = $("preview"), gpu, context;
 let photo = null, opening = false, exporting = false, comparing = false, split = false;
 let mode = "fit", pan = [0,0], detail = null, cpuOriginal = null, cpuEdited = null;
@@ -16,8 +19,10 @@ function busy(message) { $("busy").hidden = !message; $("busy-text").textContent
 function status(message) { $("status").textContent = message; }
 function availability() {
   $("controls").disabled = $("preset-tools").disabled = !photo || opening || exporting;
+  if (maskEditor) $("mask-tools").disabled=!photo || opening || exporting;
   historyButtons();
   for (const id of ["reset","compare","export","fit","zoom","split"]) $(id).disabled = !photo || opening || exporting;
+  $("export").disabled ||= maskBusy;
   $("split-position").disabled = !photo || opening || exporting;
   $("open").disabled = $("choose").disabled = opening || exporting;
 }
@@ -102,6 +107,7 @@ function render() {
       context.save(); context.beginPath(); context.rect(0,0,canvas.width*fraction,canvas.height); context.clip(); draw(true); context.restore();
     }
   }
+  drawMaskOverlay(v);
   $("compare-label").hidden = !comparing;
   $("split-line").hidden = !split || comparing;
   $("split-line").style.left = `${fraction*100}%`;
@@ -111,6 +117,7 @@ function resize() {
   const rect = $("canvas").getBoundingClientRect();
   canvas.width = Math.max(1,Math.round((rect.width-2)*devicePixelRatio));
   canvas.height = Math.max(1,Math.round((rect.height-2)*devicePixelRatio));
+  $("mask-overlay").width=canvas.width;$("mask-overlay").height=canvas.height;
   render(); if (mode === "zoom") scheduleDetail();
 }
 new ResizeObserver(resize).observe($("canvas"));
@@ -129,8 +136,9 @@ async function openFile(file) {
       catch { cpuCanvas(); await loadCpu(next); }
     } else await loadCpu(next);
     photo = next; comparing = false; split = false; mode = "fit"; pan = [0,0];
+    maskEditor.masks=[];maskEditor.setOverlay(null);overlayKey="";appliedMaskKey="[]";maskGeneration++;maskAbort?.abort();maskBusy=false;
     setControls(defaults); history=[settings()]; historyIndex=0; $("preset").value="base"; updateOutputs();
-    $("empty").hidden = true; canvas.hidden = false;
+    $("empty").hidden = true; canvas.hidden = false;$("mask-overlay").hidden=false;
     $("filename").textContent = next.filename;
     $("dimensions").textContent = `${next.width} × ${next.height} · 미리보기 ${(next.preview_width*next.preview_height/1e6).toFixed(1)}MP`;
     updateViewButtons(); resize(); status("준비됐어요 · 원본은 안전하게"); scheduleHistogram();
@@ -139,8 +147,10 @@ async function openFile(file) {
 }
 function scheduleEdits() {
   revision++; updateOutputs();
-  if (gpu) { queueRender(); status(gpu.software ? "보정 완료 · WebGL2 소프트웨어" : "보정 완료 · WebGL2 미리보기"); scheduleHistogram(); }
+  if (gpu && JSON.stringify(settings().masks)!==appliedMaskKey) {scheduleMaskBake();}
+  else if (gpu) { queueRender(); status(gpu.software ? "보정 완료 · WebGL2 소프트웨어" : "보정 완료 · WebGL2 미리보기"); scheduleHistogram(); }
   else { clearTimeout(editTimer); status("보정 적용 중…"); editTimer=setTimeout(refreshCpu,100); }
+  scheduleOverlay();
 }
 async function refreshCpu() {
   if (!photo || cpuRunning || opening || exporting || gpu) return;
@@ -157,7 +167,7 @@ async function refreshCpu() {
 
 function scheduleHistogram() { clearTimeout(histogramTimer); histogramTimer=setTimeout(updateHistogram,180); }
 function updateHistogram() {
-  if (!photo || opening || histogramRunning) return;
+  if (!photo || opening || histogramRunning || maskBusy) return;
   try {
     let pixels;
     if (gpu) { pixels=gpu.histogram(settings(),view()); render(); }
@@ -222,7 +232,9 @@ async function loadDetail() {
     if (gpu) {
       const data=await linearData(await fetch(`/api/photos/${id}/${query}`,{signal}));
       if (version !== detailRevision || photo.id !== id || mode !== "zoom") return;
-      gpu.loadDetail(data);
+      const masked=settings().masks.length ? await linearData(await postImage(id,`masked-detail?x=${x}&y=${y}&width=${width}&height=${height}`,settings(),signal)) : null;
+      if (version !== detailRevision || photo.id!==id || mode!=="zoom") return;
+      gpu.loadDetail(data,masked);
     } else {
       const responses=await Promise.all([postImage(id,query,defaults,signal),postImage(id,query,settings(),signal)]);
       original=await createImageBitmap(await responses[0].blob()); edited=await createImageBitmap(await responses[1].blob());
@@ -255,7 +267,7 @@ $("fit").onclick=() => setMode("fit"); $("zoom").onclick=() => {if (mode !== "zo
 $("split").onclick=() => {split=!split;comparing=false;updateViewButtons();render();};
 $("split-position").oninput=queueRender;
 inputs.forEach((input) => input.addEventListener("input",scheduleEdits));
-$("reset").onclick=() => applySettings(defaults);
+$("reset").onclick=() => applySettings({...defaults,masks:[]});
 $("dismiss").onclick=() => {$("error").hidden=true;};
 $("open").onclick=$("choose").onclick=() => $("file").click();
 $("file").onchange=() => openFile($("file").files[0]);
@@ -270,7 +282,7 @@ for (const name of ["pointerup","pointercancel","lostpointercapture","blur"]) $(
 $("compare").addEventListener("keydown",(event) => {if ([" ","Enter"].includes(event.key)) {event.preventDefault();compare(true);}});
 $("compare").addEventListener("keyup",() => compare(false));
 $("export").onclick=async () => {
-  if (!photo || opening || exporting) return;
+  if (!photo || opening || exporting || maskBusy) return;
   compare(false);exporting=true;availability();busy("원본 해상도로 현상하고 JPEG를 만들고 있어요…");
   try {
     const response=await postImage(photo.id,"export",settings());
@@ -320,6 +332,7 @@ function listPresets(selected="") {
 function setControls(v) {
  for (const input of inputs) input.value=v[input.id];
  $("monochrome").checked=v.monochrome;
+ if (Array.isArray(v.masks) && maskEditor) maskEditor.masks=v.masks;
 }
 function historyButtons() {
  const locked=!photo || opening || exporting;
@@ -357,7 +370,7 @@ $("save-preset").onclick=()=>{
  const name=$("preset-name").value.trim();
  if (!name) return error("프리셋 이름을 입력해 주세요.");
  if (custom.length>=100) return error("사용자 프리셋은 최대 100개입니다.");
- const p={id:"user-"+crypto.randomUUID(),name,values:settings()};
+ const p={id:"user-"+crypto.randomUUID(),name,values:Object.fromEntries(Object.keys(defaults).map(k=>[k,settings()[k]]))};
  if (persist([...custom,p])) {listPresets(p.id);$("preset-name").value="";status("프리셋을 이 브라우저에 저장했습니다");}
 };
 $("delete-preset").onclick=()=>{
@@ -387,3 +400,71 @@ $("preset-import-file").onchange=async()=>{
  } catch (e) {error("프리셋을 불러오지 못했습니다: "+e.message);}
  finally {$("preset-import-file").value="";}
 };
+
+function drawMaskOverlay(v) {
+ const layer=$("mask-overlay"),ctx=layer.getContext("2d");
+ ctx.clearRect(0,0,layer.width,layer.height);
+ if (photo && !comparing && maskEditor) maskEditor.draw(ctx,v,photo,layer.width,layer.height);
+}
+function scheduleMaskBake() {
+ clearTimeout(maskTimer);const generation=++maskGeneration;maskAbort?.abort();
+ maskBusy=true;availability();status("마스크 보정을 적용하고 있어요…");
+ maskTimer=setTimeout(async()=>{
+  const id=photo.id,values=settings(),key=JSON.stringify(values.masks);
+  try {
+   if (!values.masks.length) {gpu.clearMasked();appliedMaskKey=key;}
+   else {
+    maskAbort=new AbortController();
+    const data=await linearData(await postImage(id,"masked-pixels",values,maskAbort.signal));
+    if (generation!==maskGeneration || photo.id!==id) return;
+    gpu.loadMasked(data);appliedMaskKey=key;
+   }
+   clearDetail();render();scheduleDetail();scheduleHistogram();status("마스크 보정 완료");
+  } catch (e) {if (e.name!=="AbortError" && generation===maskGeneration) error("마스크 보정 실패: "+e.message);}
+  finally {if (generation===maskGeneration) {maskBusy=false;availability();scheduleHistogram();}}
+ },120);
+}
+function scheduleOverlay() {
+ clearTimeout(overlayTimer);
+ if (!photo || !maskEditor) return;
+ const selected=maskEditor.selected,mask=maskEditor.current();
+ const geometry=mask ? {...mask,adjustments:undefined} : null;
+ const key=photo.id+":"+selected+":"+JSON.stringify(geometry);
+ if (key===overlayKey) return;
+ const generation=++overlayGeneration;overlayAbort?.abort();maskEditor.setOverlay(null);queueRender();
+ if (!mask) {overlayKey=key;return;}
+ overlayTimer=setTimeout(async()=>{
+  const id=photo.id;
+  try {
+   overlayAbort=new AbortController();
+   const response=await postImage(id,`mask-overlay?selected=${selected}`,settings(),overlayAbort.signal);
+   const image=await createImageBitmap(await response.blob());
+   if (generation!==overlayGeneration || photo.id!==id) {image.close();return;}
+   maskEditor.setOverlay(image);overlayKey=key;queueRender();
+  } catch (e) {if (e.name!=="AbortError" && generation===overlayGeneration) error("마스크 표시 실패: "+e.message);}
+ },140);
+}
+maskEditor=new MaskEditor({onChange:(commit)=>{scheduleEdits();if (commit) record();},onView:()=>{queueRender();if (!maskEditor?.drawing) scheduleOverlay();},onError:error,
+ onPick:async point=>{const response=await checked(await fetch(`/api/photos/${photo.id}/sample-color?x=${point.x}&y=${point.y}`));return (await response.json()).color;}});
+function imagePoint(event) {
+ if (!photo) return null;
+ const rect=canvas.getBoundingClientRect(),v=view();
+ const x=((event.clientX-rect.left)*canvas.width/rect.width-v.offset[0])/v.scale+v.origin[0];
+ const y=((event.clientY-rect.top)*canvas.height/rect.height-v.offset[1])/v.scale+v.origin[1];
+ if (x<0 || y<0 || x>photo.width || y>photo.height) return null;
+ return {x:x/photo.width,y:y/photo.height};
+}
+let maskPointer=null;
+$("canvas").addEventListener("pointerdown",event=>{
+ if (!photo || opening || exporting || !maskEditor.active || event.button!==0) return;
+ if (!maskEditor.down(imagePoint(event))) return;
+ event.preventDefault();event.stopImmediatePropagation();maskPointer=event.pointerId;$("canvas").setPointerCapture(event.pointerId);
+},true);
+$("canvas").addEventListener("pointermove",event=>{
+ if (maskPointer!==event.pointerId) return;
+ event.preventDefault();event.stopImmediatePropagation();maskEditor.move(imagePoint(event));
+},true);
+for (const name of ["pointerup","pointercancel","lostpointercapture"]) $("canvas").addEventListener(name,event=>{
+ if (maskPointer!==event.pointerId) return;
+ event.preventDefault();event.stopImmediatePropagation();maskPointer=null;maskEditor.up(name==="pointercancel");
+},true);

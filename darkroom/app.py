@@ -5,6 +5,8 @@ from tempfile import TemporaryDirectory
 import threading
 import time
 from uuid import uuid4
+from io import BytesIO
+from PIL import Image
 
 import numpy as np
 import rawpy
@@ -14,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from .imaging import Adjustments, develop, jpeg
+from .masking import bake_masks, mask_weight
 
 STATIC = Path(__file__).parent / "static"
 MAX_UPLOAD = 256 * 1024 * 1024
@@ -84,7 +87,7 @@ class Studio:
                 pending.unlink(missing_ok=True)
         return np.load(cache, mmap_mode="r", allow_pickle=False)
 
-    def pixels(self, photo_id: str, region: tuple | None = None, settings: Adjustments | None = None):
+    def pixels(self, photo_id: str, region: tuple | None = None, settings: Adjustments | None = None, linear=False):
         with self.lock:
             photo = self.get(photo_id)
             x = y = 0
@@ -99,7 +102,11 @@ class Studio:
                 headers = {"X-Image-Width": str(width), "X-Image-Height": str(height),
                            "X-Image-X": str(x), "X-Image-Y": str(y)}
                 if settings is not None:
-                    return jpeg(rgb, settings, quality=95, origin=(x,y)), headers
+                    scale=(1,1) if region else (photo.width/width,photo.height/height)
+                    if linear:
+                        rgb=bake_masks(rgb,settings.masks,origin=(x,y),pixel_scale=scale,full_size=(photo.width,photo.height))
+                    else:
+                        return jpeg(rgb, settings, quality=95, origin=(x,y),pixel_scale=scale,full_size=(photo.width,photo.height)), headers
                 return rgb.astype("<u2", copy=False).tobytes(), headers
             except (rawpy.LibRawError, ValueError) as exc:
                 raise HTTPException(422, "원본 해상도 미리보기를 만들 수 없습니다.") from exc
@@ -110,9 +117,23 @@ class Studio:
             try:
                 rgb = self.full(photo) if full else photo.preview
                 pixel_scale = (1,1) if full else (photo.width/rgb.shape[1],photo.height/rgb.shape[0])
-                return jpeg(rgb, settings, quality=95 if full else 85, pixel_scale=pixel_scale)
+                return jpeg(rgb, settings, quality=95 if full else 85, pixel_scale=pixel_scale,full_size=(photo.width,photo.height))
             except (rawpy.LibRawError, ValueError) as exc:
                 raise HTTPException(422, "RAW 현상에 실패했습니다. 다른 NEF 파일을 확인해 주세요.") from exc
+
+    def overlay(self,photo_id,settings,selected):
+        with self.lock:
+            photo=self.get(photo_id)
+            if selected>=len(settings.masks):
+                raise HTTPException(422,"마스크를 선택해 주세요.")
+            h,w=photo.preview.shape[:2]
+            xx=(np.arange(w,dtype=np.float32)[None,:]+.5)/w
+            yy=(np.arange(h,dtype=np.float32)[:,None]+.5)/h
+            weight=mask_weight(settings.masks[selected],photo.preview.astype(np.float32)/65535,xx,yy,(photo.width,photo.height))
+            rgba=np.empty((h,w,4),dtype=np.uint8);rgba[:,:,:3]=[255,60,70]
+            rgba[:,:,3]=np.rint(np.broadcast_to(weight,(h,w))*.45*255).astype(np.uint8)
+            output=BytesIO();Image.fromarray(rgba).save(output,format="PNG")
+            return output.getvalue()
 
 
 @asynccontextmanager
@@ -187,10 +208,39 @@ def export(photo_id: str, settings: Adjustments, request: Request):
                     headers={"Content-Disposition": 'attachment; filename="mydarkroom.jpg"'})
 
 
+@app.post("/api/photos/{photo_id}/masked-pixels")
+def masked_pixels(photo_id:str,settings:Adjustments,request:Request):
+    data,headers=request.app.state.studio.pixels(photo_id,settings=settings,linear=True)
+    return Response(data,media_type="application/octet-stream",headers=headers)
+
+
+@app.post("/api/photos/{photo_id}/masked-detail")
+def masked_detail(photo_id:str,settings:Adjustments,request:Request,
+                  x:int=Query(ge=0),y:int=Query(ge=0),width:int=Query(ge=1,le=4096),height:int=Query(ge=1,le=4096)):
+    data,headers=request.app.state.studio.pixels(photo_id,(x,y,width,height),settings,linear=True)
+    return Response(data,media_type="application/octet-stream",headers=headers)
+
+
+@app.post("/api/photos/{photo_id}/mask-overlay")
+def mask_overlay(photo_id:str,settings:Adjustments,request:Request,selected:int=Query(ge=0,le=7)):
+    return Response(request.app.state.studio.overlay(photo_id,settings,selected),media_type="image/png")
+
+
 @app.get("/api/photos/{photo_id}/pixels")
 def pixels(photo_id: str, request: Request):
     data, headers = request.app.state.studio.pixels(photo_id)
     return Response(data, media_type="application/octet-stream", headers=headers)
+
+
+@app.get("/api/photos/{photo_id}/sample-color")
+def sample_color(photo_id:str,request:Request,x:float=Query(ge=0,le=1),y:float=Query(ge=0,le=1)):
+    studio=request.app.state.studio
+    with studio.lock:
+        photo=studio.get(photo_id)
+        h,w=photo.preview.shape[:2]
+        rgb=photo.preview[min(h-1,int(y*h)),min(w-1,int(x*w))].astype(np.float32)/65535
+        rgb=np.where(rgb<=.0031308,rgb*12.92,1.055*rgb**(1/2.4)-.055)
+        return {"color":[round(float(v)*255)/255 for v in np.clip(rgb,0,1)]}
 
 
 @app.get("/api/photos/{photo_id}/detail")
