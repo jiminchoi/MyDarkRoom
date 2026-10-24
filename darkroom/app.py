@@ -99,7 +99,7 @@ class Studio:
                 headers = {"X-Image-Width": str(width), "X-Image-Height": str(height),
                            "X-Image-X": str(x), "X-Image-Y": str(y)}
                 if settings is not None:
-                    return jpeg(rgb, settings, quality=95), headers
+                    return jpeg(rgb, settings, quality=95, origin=(x,y)), headers
                 return rgb.astype("<u2", copy=False).tobytes(), headers
             except (rawpy.LibRawError, ValueError) as exc:
                 raise HTTPException(422, "원본 해상도 미리보기를 만들 수 없습니다.") from exc
@@ -109,7 +109,8 @@ class Studio:
             photo = self.get(photo_id)
             try:
                 rgb = self.full(photo) if full else photo.preview
-                return jpeg(rgb, settings, quality=95 if full else 85)
+                pixel_scale = (1,1) if full else (photo.width/rgb.shape[1],photo.height/rgb.shape[0])
+                return jpeg(rgb, settings, quality=95 if full else 85, pixel_scale=pixel_scale)
             except (rawpy.LibRawError, ValueError) as exc:
                 raise HTTPException(422, "RAW 현상에 실패했습니다. 다른 NEF 파일을 확인해 주세요.") from exc
 

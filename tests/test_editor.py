@@ -119,7 +119,8 @@ def test_real_nef_upload_adjust_export(client):
     cached = np.load(app.state.studio.photos[photo["id"]].path.with_suffix(".npy"), mmap_mode="r")
     assert np.array_equal(np.frombuffer(detail.content,dtype="<u2").reshape(60,80,3),cached[100:160,100:180])
     del cached
-    exported = client.post(f"/api/photos/{photo['id']}/export", json={"exposure": 0.8, "temperature": 20})
+    exported = client.post(f"/api/photos/{photo['id']}/export", json={"exposure": 0.8, "temperature": 20,
+        "monochrome":True,"mix_red":60,"mix_green":30,"mix_blue":10,"tone_hue":35,"tone_amount":25,"grain":50,"grain_size":2})
     assert exported.status_code == 200
     image = Image.open(BytesIO(exported.content))
     image.load()

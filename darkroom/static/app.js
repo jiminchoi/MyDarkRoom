@@ -2,8 +2,8 @@ import { GpuRenderer } from "./gpu.js";
 
 const $ = (id) => document.getElementById(id);
 const inputs = [...document.querySelectorAll('#controls input[type="range"]')];
-const defaults = Object.fromEntries(inputs.map((input) => [input.id, 0]));
-const settings = () => Object.fromEntries(inputs.map((input) => [input.id, Number(input.value)]));
+const defaults = {...Object.fromEntries(inputs.map((input) => [input.id, Number(input.defaultValue)])), monochrome:false};
+const settings = () => ({...Object.fromEntries(inputs.map((input) => [input.id, Number(input.value)])), monochrome:$("monochrome").checked});
 let canvas = $("preview"), gpu, context;
 let photo = null, opening = false, exporting = false, comparing = false, split = false;
 let mode = "fit", pan = [0,0], detail = null, cpuOriginal = null, cpuEdited = null;
@@ -15,7 +15,8 @@ function error(message) { $("error-text").textContent = message; $("error").hidd
 function busy(message) { $("busy").hidden = !message; $("busy-text").textContent = message || ""; }
 function status(message) { $("status").textContent = message; }
 function availability() {
-  $("controls").disabled = !photo || opening || exporting;
+  $("controls").disabled = $("preset-tools").disabled = !photo || opening || exporting;
+  historyButtons();
   for (const id of ["reset","compare","export","fit","zoom","split"]) $(id).disabled = !photo || opening || exporting;
   $("split-position").disabled = !photo || opening || exporting;
   $("open").disabled = $("choose").disabled = opening || exporting;
@@ -128,7 +129,7 @@ async function openFile(file) {
       catch { cpuCanvas(); await loadCpu(next); }
     } else await loadCpu(next);
     photo = next; comparing = false; split = false; mode = "fit"; pan = [0,0];
-    inputs.forEach((input) => {input.value=0;}); updateOutputs();
+    setControls(defaults); history=[settings()]; historyIndex=0; $("preset").value="base"; updateOutputs();
     $("empty").hidden = true; canvas.hidden = false;
     $("filename").textContent = next.filename;
     $("dimensions").textContent = `${next.width} × ${next.height} · 미리보기 ${(next.preview_width*next.preview_height/1e6).toFixed(1)}MP`;
@@ -254,7 +255,7 @@ $("fit").onclick=() => setMode("fit"); $("zoom").onclick=() => {if (mode !== "zo
 $("split").onclick=() => {split=!split;comparing=false;updateViewButtons();render();};
 $("split-position").oninput=queueRender;
 inputs.forEach((input) => input.addEventListener("input",scheduleEdits));
-$("reset").onclick=() => {inputs.forEach((input) => {input.value=0;});scheduleEdits();};
+$("reset").onclick=() => applySettings(defaults);
 $("dismiss").onclick=() => {$("error").hidden=true;};
 $("open").onclick=$("choose").onclick=() => $("file").click();
 $("file").onchange=() => openFile($("file").files[0]);
@@ -281,8 +282,108 @@ $("export").onclick=async () => {
   finally {exporting=false;busy(null);availability();if (!gpu) refreshCpu();}
 };
 document.addEventListener("keydown",(event) => {
-  if (event.ctrlKey || event.metaKey || event.altKey || ["INPUT","TEXTAREA"].includes(event.target.tagName)) return;
+  if (["TEXTAREA","SELECT"].includes(event.target.tagName) || (event.target.tagName==="INPUT" && !["range","checkbox"].includes(event.target.type))) return;
+  if ((event.ctrlKey || event.metaKey) && ["z","y"].includes(event.key.toLowerCase())) {
+    event.preventDefault(); travel(event.key.toLowerCase()==="y" || event.shiftKey ? 1 : -1); return;
+  }
+  if (event.ctrlKey || event.metaKey || event.altKey) return;
   if (event.key.toLowerCase() === "o" && !opening && !exporting) $("file").click();
   if (event.key === "1") setMode("zoom"); if (event.key.toLowerCase() === "f") setMode("fit");
 });
 fetch("/api/health").then(checked).then((r) => r.json()).then((data) => {$("engine").textContent=`RAW ENGINE · LibRaw ${data.libraw}`;}).catch(() => error("서버에 연결할 수 없어요. 실행 상태를 확인해 주세요."));
+
+let history=[], historyIndex=-1;
+const storageKey="mydarkroom.presets.v1";
+const builtins=[
+ {id:"base",name:"기본 현상",values:defaults},
+ {id:"mono",name:"클래식 흑백",values:{...defaults,monochrome:true,contrast:20}},
+ {id:"portrait",name:"부드러운 인물",values:{...defaults,contrast:-15,shadows:20,saturation:-10}},
+ {id:"warm",name:"따뜻한 필름",values:{...defaults,temperature:15,tone_hue:35,tone_amount:18,grain:25,grain_size:2}},
+ {id:"silver",name:"실버 그레인",values:{...defaults,monochrome:true,mix_red:45,mix_green:45,mix_blue:10,contrast:30,grain:45}}
+];
+let custom=[];
+function validValues(v) {
+ return v && typeof v.monochrome==="boolean" && inputs.every(i=>Number.isFinite(v[i.id]) && v[i.id]>=Number(i.min) && v[i.id]<=Number(i.max));
+}
+try {
+ const saved=JSON.parse(localStorage.getItem(storageKey) || "[]");
+ if (!Array.isArray(saved)) throw new Error("invalid presets");
+ custom=saved.filter(p=>typeof p.id==="string" && p.id.startsWith("user-") && typeof p.name==="string" && p.name.length<=60 && validValues(p.values)).slice(0,100);
+} catch {error("저장한 프리셋을 읽지 못했습니다. 기본 프리셋을 사용합니다.");}
+function listPresets(selected="") {
+ $("preset").replaceChildren();
+ const placeholder=new Option("직접 보정",""); $("preset").add(placeholder);
+ for (const p of [...builtins,...custom]) $("preset").add(new Option(p.name,p.id));
+ $("preset").value=selected;
+ $("delete-preset").disabled=!custom.some(p=>p.id===selected);
+}
+function setControls(v) {
+ for (const input of inputs) input.value=v[input.id];
+ $("monochrome").checked=v.monochrome;
+}
+function historyButtons() {
+ const locked=!photo || opening || exporting;
+ $("undo").disabled=locked || historyIndex<=0; $("redo").disabled=locked || historyIndex>=history.length-1;
+}
+function record() {
+ const next=settings();
+ if (JSON.stringify(next)===JSON.stringify(history[historyIndex])) return;
+ history=history.slice(0,historyIndex+1); history.push(next);
+ if (history.length>100) history.shift();
+ historyIndex=history.length-1; historyButtons();
+ $("preset").value=""; $("delete-preset").disabled=true;
+}
+function applySettings(v) {setControls(v);scheduleEdits();record();}
+function travel(direction) {
+ if (!photo || opening || exporting) return;
+ record();
+ const index=historyIndex+direction;
+ if (index<0 || index>=history.length) return;
+ historyIndex=index;setControls(history[index]);scheduleEdits();historyButtons();$("preset").value="";$("delete-preset").disabled=true;
+}
+for (const input of inputs) input.addEventListener("change",record);
+$("monochrome").onchange=()=>{scheduleEdits();record();};
+$("undo").onclick=()=>travel(-1);$("redo").onclick=()=>travel(1);
+$("preset").onchange=()=>{
+ const p=[...builtins,...custom].find(p=>p.id===$("preset").value);
+ if (p) {applySettings(p.values);$("preset").value=p.id;}
+ $("delete-preset").disabled=!p || !custom.includes(p);
+};
+function persist(next) {
+ try {localStorage.setItem(storageKey,JSON.stringify(next));custom=next;return true;}
+ catch {error("프리셋을 저장하지 못했습니다. 브라우저 저장 공간/설정을 확인하세요.");return false;}
+}
+$("save-preset").onclick=()=>{
+ const name=$("preset-name").value.trim();
+ if (!name) return error("프리셋 이름을 입력해 주세요.");
+ if (custom.length>=100) return error("사용자 프리셋은 최대 100개입니다.");
+ const p={id:"user-"+crypto.randomUUID(),name,values:settings()};
+ if (persist([...custom,p])) {listPresets(p.id);$("preset-name").value="";status("프리셋을 이 브라우저에 저장했습니다");}
+};
+$("delete-preset").onclick=()=>{
+ const id=$("preset").value;
+ if (persist(custom.filter(p=>p.id!==id))) listPresets();
+};
+listPresets("base");
+
+$("preset-export").onclick=()=>{
+ const data={version:1,presets:custom};
+ const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:"application/json"}));
+ const link=document.createElement("a");link.href=url;link.download="mydarkroom-presets.json";
+ document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
+};
+$("preset-import").onclick=()=>$("preset-import-file").click();
+$("preset-import-file").onchange=async()=>{
+ const file=$("preset-import-file").files[0]; if (!file) return;
+ try {
+  if (file.size>1024*1024) throw new Error("프리셋 파일은 최대 1 MB입니다.");
+  const data=JSON.parse(await file.text());
+  if (data.version!==1 || !Array.isArray(data.presets) || !data.presets.length || custom.length+data.presets.length>100) throw new Error("프리셋 파일 형식 또는 개수를 확인하세요.");
+  const entries=data.presets.map(p=>{
+   if (!p || typeof p.name!=="string" || !p.name.trim() || p.name.length>60 || !validValues(p.values)) throw new Error("올바르지 않은 프리셋 값입니다.");
+   return {id:"user-"+crypto.randomUUID(),name:p.name,values:Object.fromEntries(Object.keys(defaults).map(k=>[k,p.values[k]]))};
+  });
+  if (persist([...custom,...entries])) {applySettings(entries[0].values);listPresets(entries[0].id);status("프리셋 파일을 불러와 첫 프리셋을 적용했습니다.");}
+ } catch (e) {error("프리셋을 불러오지 못했습니다: "+e.message);}
+ finally {$("preset-import-file").value="";}
+};

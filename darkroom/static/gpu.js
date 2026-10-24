@@ -13,6 +13,9 @@ uniform float scale, splitPosition;
 uniform bool hasDetail, before, split, histogram;
 uniform vec4 light;
 uniform vec3 color;
+uniform bool monochrome;
+uniform vec3 mixer, tone;
+uniform float toneAmount, grain, grainSize;
 out vec4 result;
 vec3 sample16(usampler2D tex, vec2 uv) {
   ivec2 size = textureSize(tex, 0);
@@ -49,6 +52,16 @@ void main() {
   x = (x-.5)*exp2(l.y/100.)+.5;
   lum = dot(x,vec3(.2126,.7152,.0722));
   x = vec3(lum)+(x-vec3(lum))*(1.+c.z/100.);
+  if (!original) {
+    if (monochrome) x=vec3(dot(x,mixer));
+    lum=dot(x,vec3(.2126,.7152,.0722));
+    x=mix(x,lum*tone,toneAmount/100.);
+    uvec2 cell=uvec2(floor(p/grainSize));
+    uint h=(cell.x*374761393u)^(cell.y*668265263u)^12345u;
+    h=(h^(h>>13u))*1274126177u; h=h^(h>>16u);
+    float noise=float(h&65535u)/65535.-.5;
+    x+=vec3(noise*grain/100.*.16);
+  }
   result = vec4(clamp(x,0.,1.),1.);
 }
 `;
@@ -78,7 +91,7 @@ export class GpuRenderer {
     const position = gl.getAttribLocation(this.program, "position");
     gl.enableVertexAttribArray(position); gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
     this.locations = {};
-    for (const name of ["source","detail","outputSize","fullSize","offset","origin","detailOrigin","scale","splitPosition","hasDetail","before","split","histogram","light","color"]) this.locations[name] = gl.getUniformLocation(this.program, name);
+    for (const name of ["source","detail","outputSize","fullSize","offset","origin","detailOrigin","scale","splitPosition","hasDetail","before","split","histogram","light","color","monochrome","mixer","tone","toneAmount","grain","grainSize"]) this.locations[name] = gl.getUniformLocation(this.program, name);
     gl.uniform1i(this.locations.source, 0); gl.uniform1i(this.locations.detail, 1);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     this.detailTexture = null; this.texture = null; this.target = null;
@@ -121,6 +134,15 @@ export class GpuRenderer {
     gl.uniform1i(u.histogram,histogram); gl.uniform1f(u.splitPosition,splitPosition);
     gl.uniform4f(u.light,settings.exposure,settings.contrast,settings.highlights,settings.shadows);
     gl.uniform3f(u.color,settings.temperature,settings.tint,settings.saturation);
+    gl.uniform1i(u.monochrome,Boolean(settings.monochrome));
+    const weights=[settings.mix_red ?? 30,settings.mix_green ?? 59,settings.mix_blue ?? 11];
+    const total=weights.reduce((a,b)=>a+b,0);
+    gl.uniform3fv(u.mixer,total ? weights.map(v=>v/total) : [.2126,.7152,.0722]);
+    const hue=(settings.tone_hue ?? 35)/60;
+    const rgb=[5,3,1].map(n=>{const k=(n+hue)%6;return 1-.65*Math.max(0,Math.min(k,4-k,1));});
+    const luminance=rgb[0]*.2126+rgb[1]*.7152+rgb[2]*.0722;
+    gl.uniform3fv(u.tone,rgb.map(v=>v/luminance));
+    gl.uniform1f(u.toneAmount,settings.tone_amount ?? 0); gl.uniform1f(u.grain,settings.grain ?? 0); gl.uniform1f(u.grainSize,settings.grain_size ?? 1);
     gl.drawArrays(gl.TRIANGLES,0,6);
   }
   histogram(settings, view) {

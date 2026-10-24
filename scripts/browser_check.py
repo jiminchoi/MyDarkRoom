@@ -20,7 +20,11 @@ def shader_checks(page):
     rgb[-1, -1] = 65535
     cases = [{}, {"exposure": 1.2, "temperature": 50, "tint": -40},
              {"contrast": 70, "highlights": -80, "shadows": 60, "saturation": 30},
-             {"saturation": -100}, {"exposure": -2, "temperature": -75, "tint": 60}]
+             {"saturation": -100}, {"exposure": -2, "temperature": -75, "tint": 60},
+             {"monochrome":True,"mix_red":80,"mix_green":15,"mix_blue":5},
+             {"monochrome":True,"mix_red":0,"mix_green":0,"mix_blue":0,"tone_hue":210,"tone_amount":45},
+             {"grain":80,"grain_size":2,"tone_hue":35,"tone_amount":70},
+             {"monochrome":True,"grain":100,"grain_size":1}]
     for case in cases:
         settings = Adjustments(**case)
         result = page.evaluate("""async ({rgb,settings}) => {
@@ -130,11 +134,49 @@ def workflow(browser, args, *, cpu=False):
     assert downloaded.value.suggested_filename.endswith("-edited.jpg")
     page.locator("#reset").click()
     assert page.locator("#exposure").input_value() == "0"
+    page.locator("#preset").select_option("mono")
+    assert page.locator("#monochrome").is_checked()
+    assert page.locator("#contrast").input_value()=="20"
+    page.locator("#undo").click()
+    assert not page.locator("#monochrome").is_checked()
+    page.locator("#redo").click()
+    assert page.locator("#monochrome").is_checked()
+    page.locator("#grain").fill("55")
+    page.locator("#grain").dispatch_event("change")
+    page.locator("#grain").focus()
+    page.keyboard.press("Control+z")
+    assert page.locator("#grain").input_value()=="0"
+    page.keyboard.press("Control+Shift+z")
+    assert page.locator("#grain").input_value()=="55"
+    page.locator("#preset-name").fill("테스트 프리셋 <>&")
+    page.locator("#save-preset").click()
+    saved_id=page.locator("#preset").input_value()
+    assert saved_id.startswith("user-")
+    with page.expect_download() as backup:
+        page.locator("#preset-export").click()
+    backup_bytes=Path(backup.value.path()).read_bytes()
+    page.reload()
+    assert page.locator(f'#preset option[value="{saved_id}"]').inner_text()=="테스트 프리셋 <>&"
+    page.locator("#file").set_input_files(args.nef)
+    page.wait_for_function("!document.getElementById('controls').disabled",timeout=60000)
+    page.locator("#preset").select_option(saved_id)
+    assert page.locator("#monochrome").is_checked() and page.locator("#grain").input_value()=="55"
+    page.locator("#delete-preset").click()
+    assert page.locator(f'#preset option[value="{saved_id}"]').count()==0
+    page.locator("#preset-import-file").set_input_files({"name":"presets.json","mimeType":"application/json","buffer":backup_bytes})
+    page.wait_for_function("document.getElementById('preset').value.startsWith('user-')")
+    imported=page.locator("#preset").input_value()
+    page.locator("#reset").click()
+    page.locator("#preset").select_option(imported)
+    assert page.locator("#grain").input_value()=="55" and page.locator("#monochrome").is_checked()
+    if args.artifacts:
+        page.screenshot(path=str(Path(args.artifacts)/f"stage3-{'cpu' if cpu else 'gpu'}.png"),full_page=True)
     page.set_viewport_size({"width":390,"height":844})
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     assert not errors, errors
     assert page.locator("#error").is_hidden(), page.locator("#error").inner_text()
     print(f"{'CPU fallback' if cpu else 'WebGL2'}: 4 MP preview, histogram, compare, split, 100%, pan, export, mobile passed")
+    print("Stage 3: monochrome preset, undo/redo, user preset persistence, JSON backup/restore passed")
     page.close()
 
 

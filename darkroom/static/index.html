@@ -43,6 +43,8 @@
     <aside aria-label="보정 도구">
       <div class="panel-heading"><div><p class="eyebrow">A LITTLE FINISHING TOUCH</p><h2>사진 다듬기</h2></div><button id="reset" class="text-button" disabled>초기화 ↺</button></div>
       <section class="histogram-panel" aria-label="RGB 히스토그램"><div class="histogram-heading"><h3>히스토그램 <span>RGB</span></h3><span id="histogram-info">보정 후 · 전체 사진</span></div><canvas id="histogram" width="512" height="180" aria-label="보정 후 전체 미리보기의 RGB 밝기 분포"></canvas><div class="histogram-axis"><span>0 · 어두움</span><span>밝음 · 255</span></div><p id="histogram-count" role="status">사진을 열면 표시됩니다</p></section>
+      <div class="history-tools"><button id="undo" disabled>↶ 실행 취소</button><button id="redo" disabled>↷ 다시 실행</button></div>
+      <fieldset id="preset-tools" disabled><legend>프리셋</legend><label class="sr-only" for="preset">프리셋 선택</label><select id="preset"></select><div class="preset-save"><label class="sr-only" for="preset-name">저장할 이름</label><input id="preset-name" maxlength="60" placeholder="나만의 프리셋 이름"><button id="save-preset">저장</button><button id="delete-preset">삭제</button></div><small>이 브라우저에 저장됩니다</small><div class="preset-files"><button id="preset-export">프리셋 파일 저장</button><button id="preset-import">파일 불러오기</button></div><input id="preset-import-file" type="file" accept=".json" hidden></fieldset>
       <fieldset id="controls" disabled>
         <legend class="sr-only">기본 보정</legend>
         <div class="control-group"><h3>빛 <span>LIGHT</span></h3>
@@ -56,7 +58,7 @@
           <label>틴트 <output for="tint">0</output><input id="tint" class="tint" type="range" min="-100" max="100" value="0"></label>
           <label>채도 <output for="saturation">0</output><input id="saturation" type="range" min="-100" max="100" value="0"></label>
         </div>
-      </fieldset>
+<div class="control-group"><h3>흑백 채널 믹서 <span>MONO</span></h3><label class="check-label"><input id="monochrome" type="checkbox"> 흑백 사용</label><label>빨강 <output for="mix_red">30</output><input id="mix_red" type="range" min="0" max="200" value="30"></label><label>초록 <output for="mix_green">59</output><input id="mix_green" type="range" min="0" max="200" value="59"></label><label>파랑 <output for="mix_blue">11</output><input id="mix_blue" type="range" min="0" max="200" value="11"></label></div><div class="control-group"><h3>색조 <span>TONING</span></h3><label>색조 각도 <output for="tone_hue">35</output><input id="tone_hue" type="range" min="0" max="360" value="35"></label><label>색조 강도 <output for="tone_amount">0</output><input id="tone_amount" type="range" min="0" max="100" value="0"></label></div><div class="control-group"><h3>그레인 <span>GRAIN</span></h3><label>양 <output for="grain">0</output><input id="grain" type="range" min="0" max="100" value="0"></label><label>크기 <output for="grain_size">1</output><input id="grain_size" type="range" min="1" max="8" value="1"></label></div>      </fieldset>
       <div class="note"><span>✳</span><p>약 400만 화소로 가볍게.<br>100%에서 드래그해 디테일을 확인하세요.</p></div>
       <div class="engine" id="engine">RAW ENGINE · LibRaw</div>
     </aside>

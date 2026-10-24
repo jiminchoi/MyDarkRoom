@@ -1,5 +1,6 @@
 from io import BytesIO
 from pathlib import Path
+import colorsys
 
 import numpy as np
 import rawpy
@@ -16,6 +17,14 @@ class Adjustments(BaseModel):
     temperature: float = Field(default=0, ge=-100, le=100)
     tint: float = Field(default=0, ge=-100, le=100)
     saturation: float = Field(default=0, ge=-100, le=100)
+    monochrome: bool = False
+    mix_red: float = Field(default=30, ge=0, le=200)
+    mix_green: float = Field(default=59, ge=0, le=200)
+    mix_blue: float = Field(default=11, ge=0, le=200)
+    tone_hue: float = Field(default=35, ge=0, le=360)
+    tone_amount: float = Field(default=0, ge=0, le=100)
+    grain: float = Field(default=0, ge=0, le=100)
+    grain_size: float = Field(default=1, ge=1, le=8)
 
 
 SRGB_PROFILE = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
@@ -59,7 +68,7 @@ def develop(path: Path, *, preview: bool, metadata: dict | None = None) -> np.nd
     return resize_preview(rgb) if preview else rgb
 
 
-def render(rgb: np.ndarray, settings: Adjustments) -> Image.Image:
+def render(rgb: np.ndarray, settings: Adjustments, *, origin=(0, 0), pixel_scale=(1, 1)) -> Image.Image:
     """Shared preview/export pipeline; process strips to bound temporary memory."""
     result = np.empty(rgb.shape, dtype=np.uint8)
     warmth = settings.temperature / 100
@@ -81,12 +90,31 @@ def render(rgb: np.ndarray, settings: Adjustments) -> Image.Image:
         x = (x - 0.5) * (2 ** (settings.contrast / 100)) + 0.5
         gray = x @ np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
         x = gray[..., None] + (x - gray[..., None]) * (1 + settings.saturation / 100)
+        if settings.monochrome:
+            weights = np.array([settings.mix_red, settings.mix_green, settings.mix_blue], dtype=np.float32)
+            weights = weights / weights.sum() if weights.sum() else np.array([.2126, .7152, .0722], dtype=np.float32)
+            gray = x @ weights
+            x = np.repeat(gray[..., None], 3, axis=2)
+        if settings.tone_amount:
+            tone = np.array(colorsys.hsv_to_rgb(settings.tone_hue / 360, .65, 1), dtype=np.float32)
+            tone /= tone @ np.array([.2126,.7152,.0722], dtype=np.float32)
+            gray = x @ np.array([.2126,.7152,.0722], dtype=np.float32)
+            amount = settings.tone_amount / 100
+            x = x * (1-amount) + gray[..., None] * tone * amount
+        if settings.grain:
+            cx = np.floor((origin[0] + (np.arange(rgb.shape[1])+.5)*pixel_scale[0])/settings.grain_size).astype(np.uint32)
+            cy = np.floor((origin[1] + (np.arange(row, min(row+128,rgb.shape[0]))+.5)*pixel_scale[1])/settings.grain_size).astype(np.uint32)
+            h = (cx[None,:]*np.uint32(374761393)) ^ (cy[:,None]*np.uint32(668265263)) ^ np.uint32(12345)
+            h = (h ^ (h >> 13)) * np.uint32(1274126177)
+            h ^= h >> 16
+            noise = (h & 65535).astype(np.float32)/65535 - .5
+            x += noise[...,None] * (settings.grain/100*.16)
         result[row:row + 128] = np.rint(np.clip(x, 0, 1) * 255).astype(np.uint8)
     return Image.fromarray(result)
 
 
-def jpeg(rgb: np.ndarray, settings: Adjustments, *, quality: int) -> bytes:
+def jpeg(rgb: np.ndarray, settings: Adjustments, *, quality: int, origin=(0,0), pixel_scale=(1,1)) -> bytes:
     output = BytesIO()
-    render(rgb, settings).save(output, format="JPEG", quality=quality,
+    render(rgb, settings, origin=origin, pixel_scale=pixel_scale).save(output, format="JPEG", quality=quality,
                                subsampling=0, icc_profile=SRGB_PROFILE)
     return output.getvalue()
