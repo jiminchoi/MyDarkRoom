@@ -4,7 +4,8 @@ const localDefaults={exposure:0,contrast:0,highlights:0,shadows:0,temperature:0,
 
 export class MaskEditor {
   constructor({onChange,onView,onError,onPick}) {
-    this.onChange=onChange;this.onView=onView;this.onError=onError;this.onPick=onPick;this.picking=false;
+    this.revision=0;this.keyRevision=-1;this.snapshotRevision=-1;this.strokeSnapshots=new WeakMap();
+    this.onChange=commit=>{this.revision++;onChange(commit);};this.onView=onView;this.onError=onError;this.onPick=onPick;this.picking=false;
     this.items=[];this.selected=-1;this.bitmap=null;this.drawing=null;
     $("mask-panel").innerHTML=`<fieldset id="mask-tools" disabled><legend>부분 보정 · 마스크</legend>
       <div class="mask-row"><select id="mask-kind" aria-label="새 마스크 종류"><option value="brush">브러시</option><option value="gradient">선형 그라디언트</option><option value="color">색상 범위</option><option value="luminance">휘도 범위</option></select><button id="mask-add">추가</button></div>
@@ -22,7 +23,7 @@ export class MaskEditor {
         <div id="local-adjustments"><h3>이 마스크의 보정</h3></div>
       </fieldset><small id="mask-help">마스크를 추가해 사진 일부만 보정하세요. 최대 8개.</small></fieldset>`;
     for (const [key,label] of Object.entries({exposure:"노출",contrast:"대비",highlights:"하이라이트",shadows:"그림자",temperature:"색온도",tint:"틴트",saturation:"채도"})) {
-      const limit=key==="exposure" ? 3 : 100,step=key==="exposure" ? .05 : 1;
+      const limit=key==="exposure" ? 3 : 100,step=key==="exposure" ? .01 : 1;
       const row=document.createElement("label");row.textContent=label;
       const out=document.createElement("output");out.id=`local-${key}-value`;row.append(out);
       const input=document.createElement("input");Object.assign(input,{id:`local-${key}`,type:"range",min:-limit,max:limit,step,value:0});row.append(input);$("local-adjustments").append(row);
@@ -51,8 +52,17 @@ export class MaskEditor {
     this.refresh();
   }
   current() {return this.items[this.selected];}
-  get masks() {return clone(this.items);}
-  set masks(value) {this.items=clone(value);this.selected=Math.min(this.selected,this.items.length-1);if (this.selected<0 && this.items.length) this.selected=0;this.drawing=null;this.refresh();}
+  get key() {if (this.keyRevision!==this.revision) {this.keyValue=JSON.stringify(this.items);this.keyRevision=this.revision;}return this.keyValue;}
+  get masks() {
+    if (this.snapshotRevision!==this.revision) {
+      this.snapshot=this.items.map(m=>{
+        if (!this.strokeSnapshots.has(m.strokes)) this.strokeSnapshots.set(m.strokes,clone(m.strokes));
+        return {...clone({...m,strokes:[]}),strokes:this.strokeSnapshots.get(m.strokes)};
+      });this.snapshotRevision=this.revision;
+    }
+    return this.snapshot;
+  }
+  set masks(value) {this.revision++;this.items=clone(value);this.selected=Math.min(this.selected,this.items.length-1);if (this.selected<0 && this.items.length) this.selected=0;this.drawing=null;this.refresh();}
   add(kind) {
     if (this.items.length>=8) return this.onError("마스크는 최대 8개입니다.");
     const names={brush:"브러시",gradient:"그라디언트",color:"색상",luminance:"휘도"};
@@ -107,7 +117,7 @@ export class MaskEditor {
     if (!cancel && m) {
       if (m.kind==="brush") {
         if (m.strokes.reduce((n,s)=>n+s.points.length,0)+this.drawing.points.length>2048) this.onError("브러시 포인트 한도에 도달했습니다. 새 마스크를 추가하세요.");
-        else m.strokes.push(this.drawing);
+        else m.strokes=[...m.strokes,this.drawing];
       } else {m.start=this.drawing.start;m.end=this.drawing.end;}
     }
     this.drawing=null;if (!cancel) this.onChange(true);else this.onView();return true;

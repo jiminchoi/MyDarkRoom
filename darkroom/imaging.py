@@ -5,8 +5,9 @@ import colorsys
 import numpy as np
 import rawpy
 from PIL import Image, ImageCms
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .masking import Mask, bake_masks
+from .raw_support import compatible_develop
 
 
 class Adjustments(BaseModel):
@@ -27,6 +28,17 @@ class Adjustments(BaseModel):
     grain: float = Field(default=0, ge=0, le=100)
     grain_size: float = Field(default=1, ge=1, le=8)
     masks: list[Mask] = Field(default_factory=list, max_length=8)
+    curve_black: float = Field(default=0,ge=0,le=100)
+    curve_shadow: float = Field(default=25,ge=0,le=100)
+    curve_mid: float = Field(default=50,ge=0,le=100)
+    curve_light: float = Field(default=75,ge=0,le=100)
+    curve_white: float = Field(default=100,ge=0,le=100)
+
+    @model_validator(mode="after")
+    def ordered_curve(self):
+        points=[self.curve_black,self.curve_shadow,self.curve_mid,self.curve_light,self.curve_white]
+        if points!=sorted(points):raise ValueError("Tone curve must be nondecreasing")
+        return self
 
 
 SRGB_PROFILE = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
@@ -48,9 +60,13 @@ def resize_preview(rgb: np.ndarray) -> np.ndarray:
 
 
 def develop(path: Path, *, preview: bool, metadata: dict | None = None) -> np.ndarray:
+    return compatible_develop(path,_develop_native,preview=preview,metadata=metadata)
+
+
+def _develop_native(path: Path, *, preview: bool, metadata: dict | None = None) -> np.ndarray:
     """Camera WB -> linear 16-bit sRGB. Never modify the original RAW."""
     with rawpy.imread(str(path)) as raw:
-        if raw.raw_type != rawpy.RawType.Flat or raw.num_colors != 3:
+        if raw.raw_type != rawpy.RawType.Flat or raw.num_colors not in (3,4):
             raise ValueError("지원하지 않는 NEF 센서 형식입니다.")
         width, height = raw.sizes.width, raw.sizes.height
         if raw.sizes.flip in (5, 6):
@@ -72,15 +88,18 @@ def develop(path: Path, *, preview: bool, metadata: dict | None = None) -> np.nd
 
 def render(rgb: np.ndarray, settings: Adjustments, *, origin=(0, 0), pixel_scale=(1, 1), full_size=None) -> Image.Image:
     """Shared preview/export pipeline; process strips to bound temporary memory."""
-    rgb = bake_masks(rgb,settings.masks,origin=origin,pixel_scale=pixel_scale,full_size=full_size)
+    full_size=full_size or (round(rgb.shape[1]*pixel_scale[0]),round(rgb.shape[0]*pixel_scale[1]))
     result = np.empty(rgb.shape, dtype=np.uint8)
     warmth = settings.temperature / 100
     tint = settings.tint / 100
     gains = np.array([2 ** (0.45 * warmth + 0.15 * tint),
                       2 ** (-0.3 * tint),
                       2 ** (-0.45 * warmth + 0.15 * tint)], dtype=np.float32)
+    curve=np.array([settings.curve_black,settings.curve_shadow,settings.curve_mid,settings.curve_light,settings.curve_white],dtype=np.float32)/100
+    identity=np.array_equal(curve,np.array([0,.25,.5,.75,1],dtype=np.float32))
     for row in range(0, rgb.shape[0], 128):
-        x = rgb[row:row + 128].astype(np.float32) / 65535
+        strip=bake_masks(rgb[row:row+128],settings.masks,origin=(origin[0],origin[1]+row*pixel_scale[1]),pixel_scale=pixel_scale,full_size=full_size)
+        x = strip.astype(np.float32) / 65535
         x *= (2 ** settings.exposure) * gains
         luma = x @ np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
         shadow_weight = np.square(1 - np.clip(luma / 0.5, 0, 1))
@@ -91,6 +110,11 @@ def render(rgb: np.ndarray, settings: Adjustments, *, origin=(0, 0), pixel_scale
         x = np.clip(x, 0, 1)
         x = np.where(x <= 0.0031308, x * 12.92, 1.055 * np.power(x, 1 / 2.4) - 0.055)
         x = (x - 0.5) * (2 ** (settings.contrast / 100)) + 0.5
+        if not identity:
+            position=np.clip(x,0,1)*4
+            index=np.minimum(position.astype(np.int32),3)
+            fraction=position-index.astype(np.float32)
+            x=curve[index]*(1-fraction)+curve[index+1]*fraction
         gray = x @ np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
         x = gray[..., None] + (x - gray[..., None]) * (1 + settings.saturation / 100)
         if settings.monochrome:
@@ -116,8 +140,11 @@ def render(rgb: np.ndarray, settings: Adjustments, *, origin=(0, 0), pixel_scale
     return Image.fromarray(result)
 
 
-def jpeg(rgb: np.ndarray, settings: Adjustments, *, quality: int, origin=(0,0), pixel_scale=(1,1), full_size=None) -> bytes:
+def jpeg(rgb: np.ndarray, settings: Adjustments, *, quality: int, origin=(0,0), pixel_scale=(1,1), full_size=None,long_edge=0,dpi=300) -> bytes:
     output = BytesIO()
-    render(rgb, settings, origin=origin, pixel_scale=pixel_scale,full_size=full_size).save(output, format="JPEG", quality=quality,
-                               subsampling=0, icc_profile=SRGB_PROFILE)
+    image=render(rgb, settings, origin=origin, pixel_scale=pixel_scale,full_size=full_size)
+    if long_edge and max(image.size)>long_edge:
+        image.thumbnail((long_edge,long_edge),Image.Resampling.LANCZOS)
+    image.save(output, format="JPEG", quality=quality,dpi=(dpi,dpi),subsampling=0, icc_profile=SRGB_PROFILE)
+    image.close()
     return output.getvalue()

@@ -84,7 +84,8 @@ def workflow(browser,args,cpu=False):
     page.locator("#compare").dispatch_event("keyup",{"key":"Enter"})
     if args.artifacts:
         page.screenshot(path=str(Path(args.artifacts)/f"stage4-{'cpu' if cpu else 'gpu'}.png"),full_page=True)
-    with page.expect_download(timeout=120000) as downloaded:page.locator("#export").click()
+    with page.expect_download(timeout=120000) as downloaded:
+        page.locator("#export").click();page.locator("#export-start").click()
     with Image.open(BytesIO(Path(downloaded.value.path()).read_bytes())) as image:
         image.load();assert image.size==(photo["width"],photo["height"]) and image.info["icc_profile"]
     assert len(states[-1]["masks"])==4

@@ -1,12 +1,14 @@
 import { GpuRenderer } from "./gpu.js";
 import { MaskEditor } from "./masks.js";
+import {ExportDialog,saveToDirectory} from "./export.js";
 let maskEditor, maskBusy=false, appliedMaskKey="[]", maskTimer, maskGeneration=0, maskAbort;
+let maskRequestRunning=false;
 let overlayTimer, overlayGeneration=0, overlayAbort, overlayKey="";
 
 const $ = (id) => document.getElementById(id);
 const inputs = [...document.querySelectorAll('#controls input[type="range"]')];
 const defaults = {...Object.fromEntries(inputs.map((input) => [input.id, Number(input.defaultValue)])), monochrome:false};
-const settings = () => ({...Object.fromEntries(inputs.map((input) => [input.id, Number(input.value)])), monochrome:$("monochrome").checked,masks:maskEditor?.masks || []});
+const settings = (includeMasks=true) => ({...Object.fromEntries(inputs.map((input) => [input.id, Number(input.value)])), monochrome:$("monochrome").checked,masks:includeMasks ? maskEditor?.masks || [] : []});
 let canvas = $("preview"), gpu, context;
 let photo = null, opening = false, exporting = false, comparing = false, split = false;
 let mode = "fit", pan = [0,0], detail = null, cpuOriginal = null, cpuEdited = null;
@@ -14,7 +16,7 @@ let revision = 0, detailRevision = 0, editTimer, detailTimer, histogramTimer, fr
 let cpuRunning = false, histogramRunning = false, detailAbort;
 const worker = new Worker("/static/histogram-worker.js");
 
-function error(message) { $("error-text").textContent = message; $("error").hidden = false; }
+function error(message) { $("error-text").textContent = message; $("raw-help").hidden=!/DNG/i.test(message); $("error").hidden = false; }
 function busy(message) { $("busy").hidden = !message; $("busy-text").textContent = message || ""; }
 function status(message) { $("status").textContent = message; }
 function availability() {
@@ -34,6 +36,7 @@ async function checked(response) {
   return response;
 }
 function updateOutputs() {
+  drawCurve();
   for (const input of inputs) document.querySelector(`output[for="${input.id}"]`).textContent = input.id === "exposure" ? Number(input.value).toFixed(2) : input.value;
 }
 async function postImage(id, kind, values, signal) {
@@ -50,6 +53,7 @@ async function linearData(response) {
   return data;
 }
 function cpuCanvas() {
+  const previous=gpu;gpu=null;previous?.dispose();
   const replacement = canvas.cloneNode(false); canvas.replaceWith(replacement); canvas = replacement;
   gpu = null; context = canvas.getContext("2d",{alpha:false});
   $("renderer-mode").textContent = "CPU 미리보기 · GPU 사용 불가";
@@ -90,7 +94,7 @@ function view() {
 function render() {
   if (!photo || !canvas.width || !canvas.height) return;
   const v = view(), fraction = Number($("split-position").value)/100;
-  if (gpu) gpu.draw(settings(),v,{before:comparing,split,splitPosition:fraction});
+  if (gpu) gpu.draw(settings(false),v,{before:comparing,split,splitPosition:fraction});
   else if (cpuOriginal) {
     context.fillStyle = "#101212"; context.fillRect(0,0,canvas.width,canvas.height);
     const draw = (original) => {
@@ -135,7 +139,12 @@ async function openFile(file) {
       try { gpu.load(await linearData(await fetch(`/api/photos/${next.id}/pixels`)),next); }
       catch { cpuCanvas(); await loadCpu(next); }
     } else await loadCpu(next);
-    photo = next; comparing = false; split = false; mode = "fit"; pan = [0,0];
+    const previousPhoto=photo;
+    photo = next;
+    if (previousPhoto) fetch(`/api/photos/${previousPhoto.id}`,{method:"DELETE"}).catch(()=>{});
+    if (gpu) {if (cpuEdited!==cpuOriginal) closeBitmap(cpuEdited);closeBitmap(cpuOriginal);cpuOriginal=cpuEdited=null;}
+    comparing = false; split = false; mode = "fit"; pan = [0,0];
+    clearTimeout(maskTimer);clearTimeout(overlayTimer);overlayGeneration++;overlayAbort?.abort();
     maskEditor.masks=[];maskEditor.setOverlay(null);overlayKey="";appliedMaskKey="[]";maskGeneration++;maskAbort?.abort();maskBusy=false;
     setControls(defaults); history=[settings()]; historyIndex=0; $("preset").value="base"; updateOutputs();
     $("empty").hidden = true; canvas.hidden = false;$("mask-overlay").hidden=false;
@@ -145,9 +154,11 @@ async function openFile(file) {
   } catch (e) { error(e.message); }
   finally { opening = false; busy(null); availability(); $("file").value=""; }
 }
-function scheduleEdits() {
+function scheduleEdits(event) {
+  if (event?.target?.id.startsWith("curve_")) constrainCurve(event.target);
   revision++; updateOutputs();
-  if (gpu && JSON.stringify(settings().masks)!==appliedMaskKey) {scheduleMaskBake();}
+  if (gpu && maskBusy && maskEditor.key===appliedMaskKey) {maskGeneration++;clearTimeout(maskTimer);maskBusy=false;availability();}
+  if (gpu && maskEditor.key!==appliedMaskKey) {scheduleMaskBake();}
   else if (gpu) { queueRender(); status(gpu.software ? "보정 완료 · WebGL2 소프트웨어" : "보정 완료 · WebGL2 미리보기"); scheduleHistogram(); }
   else { clearTimeout(editTimer); status("보정 적용 중…"); editTimer=setTimeout(refreshCpu,100); }
   scheduleOverlay();
@@ -170,7 +181,7 @@ function updateHistogram() {
   if (!photo || opening || histogramRunning || maskBusy) return;
   try {
     let pixels;
-    if (gpu) { pixels=gpu.histogram(settings(),view()); render(); }
+    if (gpu) { pixels=gpu.histogram(settings(false),view()); render(); }
     else {
       const offscreen=document.createElement("canvas"); offscreen.width=photo.preview_width; offscreen.height=photo.preview_height;
       const ctx=offscreen.getContext("2d"); ctx.drawImage(cpuEdited,0,0); pixels=ctx.getImageData(0,0,offscreen.width,offscreen.height).data;
@@ -281,18 +292,25 @@ $("compare").addEventListener("pointerdown",(event) => {$("compare").setPointerC
 for (const name of ["pointerup","pointercancel","lostpointercapture","blur"]) $("compare").addEventListener(name,() => compare(false));
 $("compare").addEventListener("keydown",(event) => {if ([" ","Enter"].includes(event.key)) {event.preventDefault();compare(true);}});
 $("compare").addEventListener("keyup",() => compare(false));
-$("export").onclick=async () => {
+const exportDialog=new ExportDialog(()=>photo,async options=>{
   if (!photo || opening || exporting || maskBusy) return;
   compare(false);exporting=true;availability();busy("원본 해상도로 현상하고 JPEG를 만들고 있어요…");
   try {
-    const response=await postImage(photo.id,"export",settings());
-    const url=URL.createObjectURL(await response.blob()),link=document.createElement("a");
-    link.href=url;link.download=photo.filename.replace(/\.nef$/i,"")+"-edited.jpg";
-    document.body.append(link);link.click();link.remove();setTimeout(() => URL.revokeObjectURL(url),60000);
-    status("JPEG 준비 완료 · 다운로드를 확인해 주세요");
-  } catch (e) {error(e.message);}
+    const response=await postImage(photo.id,`export?long_edge=${options.longEdge}&dpi=${options.dpi}&quality=${options.quality}`,settings());
+    const blob=await response.blob();
+    if (options.directory) {
+      const filename=await saveToDirectory(options.directory,options.filename,blob);
+      status(`저장 완료 · ${options.directory.name} / ${filename}`);
+    } else {
+      const url=URL.createObjectURL(blob),link=document.createElement("a");
+      link.href=url;link.download=options.filename;document.body.append(link);link.click();link.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),1000);status("JPEG 준비 완료 · 다운로드를 확인해 주세요");
+    }
+  } catch(e) {error("JPEG 저장 실패: "+e.message);}
   finally {exporting=false;busy(null);availability();if (!gpu) refreshCpu();}
-};
+});
+$("export").onclick=()=>{if (photo&&!opening&&!exporting&&!maskBusy) exportDialog.show();};
+
 document.addEventListener("keydown",(event) => {
   if (["TEXTAREA","SELECT"].includes(event.target.tagName) || (event.target.tagName==="INPUT" && !["range","checkbox"].includes(event.target.type))) return;
   if ((event.ctrlKey || event.metaKey) && ["z","y"].includes(event.key.toLowerCase())) {
@@ -314,13 +332,16 @@ const builtins=[
  {id:"silver",name:"실버 그레인",values:{...defaults,monochrome:true,mix_red:45,mix_green:45,mix_blue:10,contrast:30,grain:45}}
 ];
 let custom=[];
+function curveDefaults(v) {return {...Object.fromEntries(Object.entries(defaults).filter(([k])=>k.startsWith("curve_"))),...v};}
 function validValues(v) {
- return v && typeof v.monochrome==="boolean" && inputs.every(i=>Number.isFinite(v[i.id]) && v[i.id]>=Number(i.min) && v[i.id]<=Number(i.max));
+ v=curveDefaults(v);
+ const points=["black","shadow","mid","light","white"].map(k=>v["curve_"+k]);
+ return points.every((v,i)=>!i||v>=points[i-1]) && v && typeof v.monochrome==="boolean" && inputs.every(i=>Number.isFinite(v[i.id]) && v[i.id]>=Number(i.min) && v[i.id]<=Number(i.max));
 }
 try {
  const saved=JSON.parse(localStorage.getItem(storageKey) || "[]");
  if (!Array.isArray(saved)) throw new Error("invalid presets");
- custom=saved.filter(p=>typeof p.id==="string" && p.id.startsWith("user-") && typeof p.name==="string" && p.name.length<=60 && validValues(p.values)).slice(0,100);
+ custom=saved.filter(p=>typeof p.id==="string" && p.id.startsWith("user-") && typeof p.name==="string" && p.name.length<=60 && validValues(p.values)).slice(0,100).map(p=>({...p,values:curveDefaults(p.values)}));
 } catch {error("저장한 프리셋을 읽지 못했습니다. 기본 프리셋을 사용합니다.");}
 function listPresets(selected="") {
  $("preset").replaceChildren();
@@ -330,6 +351,7 @@ function listPresets(selected="") {
  $("delete-preset").disabled=!custom.some(p=>p.id===selected);
 }
 function setControls(v) {
+ v=curveDefaults(v);
  for (const input of inputs) input.value=v[input.id];
  $("monochrome").checked=v.monochrome;
  if (Array.isArray(v.masks) && maskEditor) maskEditor.masks=v.masks;
@@ -394,7 +416,7 @@ $("preset-import-file").onchange=async()=>{
   if (data.version!==1 || !Array.isArray(data.presets) || !data.presets.length || custom.length+data.presets.length>100) throw new Error("프리셋 파일 형식 또는 개수를 확인하세요.");
   const entries=data.presets.map(p=>{
    if (!p || typeof p.name!=="string" || !p.name.trim() || p.name.length>60 || !validValues(p.values)) throw new Error("올바르지 않은 프리셋 값입니다.");
-   return {id:"user-"+crypto.randomUUID(),name:p.name,values:Object.fromEntries(Object.keys(defaults).map(k=>[k,p.values[k]]))};
+   return {id:"user-"+crypto.randomUUID(),name:p.name,values:Object.fromEntries(Object.keys(defaults).map(k=>[k,curveDefaults(p.values)[k]]))};
   });
   if (persist([...custom,...entries])) {applySettings(entries[0].values);listPresets(entries[0].id);status("프리셋 파일을 불러와 첫 프리셋을 적용했습니다.");}
  } catch (e) {error("프리셋을 불러오지 못했습니다: "+e.message);}
@@ -407,21 +429,27 @@ function drawMaskOverlay(v) {
  if (photo && !comparing && maskEditor) maskEditor.draw(ctx,v,photo,layer.width,layer.height);
 }
 function scheduleMaskBake() {
- clearTimeout(maskTimer);const generation=++maskGeneration;maskAbort?.abort();
+ clearTimeout(maskTimer);const generation=++maskGeneration;
  maskBusy=true;availability();status("마스크 보정을 적용하고 있어요…");
  maskTimer=setTimeout(async()=>{
-  const id=photo.id,values=settings(),key=JSON.stringify(values.masks);
+  if (maskRequestRunning || !photo || !gpu || opening) return;
+  maskRequestRunning=true;
+  const id=photo.id,values=settings(),key=maskEditor.key;
   try {
    if (!values.masks.length) {gpu.clearMasked();appliedMaskKey=key;}
    else {
     maskAbort=new AbortController();
     const data=await linearData(await postImage(id,"masked-pixels",values,maskAbort.signal));
-    if (generation!==maskGeneration || photo.id!==id) return;
+    if (photo.id!==id || key!==maskEditor.key) return;
     gpu.loadMasked(data);appliedMaskKey=key;
    }
    clearDetail();render();scheduleDetail();scheduleHistogram();status("마스크 보정 완료");
   } catch (e) {if (e.name!=="AbortError" && generation===maskGeneration) error("마스크 보정 실패: "+e.message);}
-  finally {if (generation===maskGeneration) {maskBusy=false;availability();scheduleHistogram();}}
+  finally {
+    maskRequestRunning=false;
+    if (generation!==maskGeneration && gpu && !opening && maskEditor.key!==appliedMaskKey) scheduleMaskBake();
+    else {clearTimeout(maskTimer);maskBusy=false;availability();scheduleHistogram();}
+  }
  },120);
 }
 function scheduleOverlay() {
@@ -468,3 +496,48 @@ for (const name of ["pointerup","pointercancel","lostpointercapture"]) $("canvas
  if (maskPointer!==event.pointerId) return;
  event.preventDefault();event.stopImmediatePropagation();maskPointer=null;maskEditor.up(name==="pointercancel");
 },true);
+
+const curveIds=["black","shadow","mid","light","white"].map(k=>"curve_"+k);
+function constrainCurve(input) {
+ const i=curveIds.indexOf(input.id);if (i<0) return;
+ input.value=Math.max(i?Number($(curveIds[i-1]).value):0,Math.min(i<4?Number($(curveIds[i+1]).value):100,Number(input.value)));
+}
+function drawCurve() {
+ const chart=$("tone-curve");if (!chart) return;
+ const ctx=chart.getContext("2d"),w=chart.width,h=chart.height;ctx.clearRect(0,0,w,h);
+ ctx.strokeStyle="#3b4540";ctx.lineWidth=1;
+ for (let i=0;i<=4;i++) {ctx.beginPath();ctx.moveTo(i*w/4,0);ctx.lineTo(i*w/4,h);ctx.stroke();ctx.beginPath();ctx.moveTo(0,i*h/4);ctx.lineTo(w,i*h/4);ctx.stroke();}
+ ctx.strokeStyle="#e8ad74";ctx.lineWidth=2;ctx.beginPath();
+ const ids=["black","shadow","mid","light","white"].map(k=>"curve_"+k);
+ ids.forEach((id,i)=>{const x=3+i*(w-6)/4,y=h-3-Number($(id).value)/100*(h-6);if (!i)ctx.moveTo(x,y);else ctx.lineTo(x,y);});ctx.stroke();
+ for (let i=0;i<5;i++) {ctx.beginPath();ctx.arc(3+i*(w-6)/4,h-3-Number($(ids[i]).value)/100*(h-6),3,0,Math.PI*2);ctx.fillStyle="#e8ad74";ctx.fill();}
+}
+let curveDrag=-1;
+$("tone-curve").onpointerdown=event=>{
+ if (!photo||opening||exporting) return;
+ const rect=$("tone-curve").getBoundingClientRect();curveDrag=Math.max(0,Math.min(4,Math.round((event.clientX-rect.left)/rect.width*4)));
+ $("tone-curve").setPointerCapture(event.pointerId);curveMove(event);
+};
+function curveMove(event) {
+ if (curveDrag<0) return;
+ const rect=$("tone-curve").getBoundingClientRect(),input=$(curveIds[curveDrag]);
+ input.value=Math.round(Math.max(0,Math.min(100,(1-(event.clientY-rect.top)/rect.height)*100)));
+ constrainCurve(input);scheduleEdits();
+}
+$("tone-curve").onpointermove=curveMove;
+for (const name of ["pointerup","pointercancel","lostpointercapture"]) $("tone-curve").addEventListener(name,()=>{if (curveDrag>=0) {curveDrag=-1;record();}});
+document.addEventListener("keydown",event=>{
+ const input=event.target;
+ if (!(input instanceof HTMLInputElement) || input.type!=="range" || !["ArrowLeft","ArrowRight"].includes(event.key) || input.disabled) return;
+ if (input.closest("fieldset:disabled")) return;
+ event.preventDefault();event.stopImmediatePropagation();
+ if (event.key==="ArrowRight") input.stepUp();else input.stepDown();
+ input.dispatchEvent(new Event("input",{bubbles:true}));input.dispatchEvent(new Event("change",{bubbles:true}));
+},true);
+drawCurve();
+window.addEventListener("pagehide",event=>{
+ if (event.persisted) return;
+ worker.terminate();gpu?.dispose();
+ if (cpuEdited!==cpuOriginal) closeBitmap(cpuEdited);closeBitmap(cpuOriginal);
+ if (detail) {closeBitmap(detail.original);closeBitmap(detail.edited);}maskEditor?.setOverlay(null);
+});

@@ -47,9 +47,9 @@
       <fieldset id="preset-tools" disabled><legend>프리셋</legend><label class="sr-only" for="preset">프리셋 선택</label><select id="preset"></select><div class="preset-save"><label class="sr-only" for="preset-name">저장할 이름</label><input id="preset-name" maxlength="60" placeholder="나만의 프리셋 이름"><button id="save-preset">저장</button><button id="delete-preset">삭제</button></div><small>이 브라우저에 저장됩니다</small><div class="preset-files"><button id="preset-export">프리셋 파일 저장</button><button id="preset-import">파일 불러오기</button></div><input id="preset-import-file" type="file" accept=".json" hidden></fieldset>
       <div id="mask-panel"></div>
       <fieldset id="controls" disabled>
-        <legend class="sr-only">기본 보정</legend>
+        <legend class="sr-only">기본 보정</legend><div class="control-group"><h3>톤 커브 <span>RGB MASTER</span></h3><canvas id="tone-curve" width="256" height="180" aria-label="RGB 톤 커브: 다섯 기준점의 밝기 조절"></canvas><label>블랙<output for="curve_black">0</output><input id="curve_black" type="range" min="0" max="100" value="0"></label><label>어두운 영역<output for="curve_shadow">25</output><input id="curve_shadow" type="range" min="0" max="100" value="25"></label><label>중간 영역<output for="curve_mid">50</output><input id="curve_mid" type="range" min="0" max="100" value="50"></label><label>밝은 영역<output for="curve_light">75</output><input id="curve_light" type="range" min="0" max="100" value="75"></label><label>화이트<output for="curve_white">100</output><input id="curve_white" type="range" min="0" max="100" value="100"></label></div>
         <div class="control-group"><h3>빛 <span>LIGHT</span></h3>
-          <label>노출 <output for="exposure">0.00</output><input id="exposure" type="range" min="-3" max="3" step="0.05" value="0"></label>
+          <label>노출 <output for="exposure">0.00</output><input id="exposure" type="range" min="-3" max="3" step="0.01" value="0"></label>
           <label>대비 <output for="contrast">0</output><input id="contrast" type="range" min="-100" max="100" value="0"></label>
           <label>하이라이트 <output for="highlights">0</output><input id="highlights" type="range" min="-100" max="100" value="0"></label>
           <label>그림자 <output for="shadows">0</output><input id="shadows" type="range" min="-100" max="100" value="0"></label>
@@ -64,7 +64,15 @@
       <div class="engine" id="engine">RAW ENGINE · LibRaw</div>
     </aside>
   </main>
+<dialog id="export-dialog"><form method="dialog"><div class="export-heading"><h2>JPEG 저장</h2><button value="cancel" aria-label="저장 창 닫기">×</button></div></form>
+<label>파일 이름 <input id="export-name" maxlength="180"></label>
+<div role="tablist" aria-label="출력 크기" class="export-tabs"><button id="size-original" role="tab" aria-selected="true">원본</button><button id="size-small" role="tab" aria-selected="false">최소 · 2000px</button><button id="size-custom" role="tab" aria-selected="false">커스텀</button></div>
+<label id="custom-edge-label" hidden>장축 픽셀 <input id="export-edge" type="number" min="1" max="20000" value="3000"></label><p id="export-size-info"></p>
+<div class="export-fields"><label>DPI <input id="export-dpi" type="number" min="1" max="2400" value="300"></label><label>JPEG 품질 <input id="export-quality" type="number" min="1" max="100" value="95"></label></div>
+<p class="export-help">DPI는 인쇄 크기 정보이며 픽셀 수를 바꾸지 않습니다. 원본보다 확대하지 않습니다.</p>
+<div class="folder-row"><button id="choose-output">저장 폴더 선택</button><span id="output-folder">브라우저 다운로드 폴더</span></div><p id="folder-support" class="export-help"></p>
+<button id="export-start" class="primary">JPEG 저장하기</button></dialog>
   <input type="file" id="file" accept=".nef,.NEF" hidden>
-  <div id="error" role="alert" hidden><span id="error-text"></span><button id="dismiss" aria-label="알림 닫기">×</button></div>
+  <div id="error" role="alert" hidden><span id="error-text"></span><a id="raw-help" href="https://helpx.adobe.com/camera-raw/using/adobe-dng-converter.html" target="_blank" rel="noopener noreferrer" hidden>공식 DNG Converter 설치 안내</a><button id="dismiss" aria-label="알림 닫기">×</button></div>
 </body>
 </html>

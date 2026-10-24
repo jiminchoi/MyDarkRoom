@@ -24,7 +24,9 @@ def shader_checks(page):
              {"monochrome":True,"mix_red":80,"mix_green":15,"mix_blue":5},
              {"monochrome":True,"mix_red":0,"mix_green":0,"mix_blue":0,"tone_hue":210,"tone_amount":45},
              {"grain":80,"grain_size":2,"tone_hue":35,"tone_amount":70},
-             {"monochrome":True,"grain":100,"grain_size":1}]
+             {"monochrome":True,"grain":100,"grain_size":1},
+             {"curve_black":5,"curve_shadow":18,"curve_mid":60,"curve_light":85,"curve_white":95,"saturation":20},
+             {"curve_mid":65,"curve_light":85,"monochrome":True,"grain":35}]
     for case in cases:
         settings = Adjustments(**case)
         result = page.evaluate("""async ({rgb,settings}) => {
@@ -54,7 +56,7 @@ def shader_checks(page):
     assert bins["bins"][0] == 2 and bins["bins"][100] == 1
     assert bins["bins"][256+20] == 2 and bins["bins"][512+255] == 2
     assert sum(bins["bins"]) == 9
-    print("GPU vs CPU: all 7 controls, max error <= 1/255; histogram bins verified")
+    print("GPU vs CPU: base/creative/curve cases, max error <= 1/255; histogram bins verified")
 
 
 def workflow(browser, args, *, cpu=False):
@@ -131,6 +133,7 @@ def workflow(browser, args, *, cpu=False):
     assert page.locator("#fit").get_attribute("aria-pressed") == "true"
     with page.expect_download(timeout=60000) as downloaded:
         page.locator("#export").click()
+        page.locator("#export-start").click()
     assert downloaded.value.suggested_filename.endswith("-edited.jpg")
     page.locator("#reset").click()
     assert page.locator("#exposure").input_value() == "0"

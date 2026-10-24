@@ -16,7 +16,8 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from .imaging import Adjustments, develop, jpeg
-from .masking import bake_masks, mask_weight
+from .masking import bake_masks, mask_weight,brush_grid
+from .raw_support import RawCompatibilityError,converter_path
 
 STATIC = Path(__file__).parent / "static"
 MAX_UPLOAD = 256 * 1024 * 1024
@@ -45,6 +46,8 @@ class Studio:
             try:
                 metadata = {}
                 preview = develop(path, preview=True, metadata=metadata)
+            except RawCompatibilityError as exc:
+                raise HTTPException(422,str(exc)) from exc
             except (rawpy.LibRawError, ValueError) as exc:
                 raise HTTPException(422, "이 NEF를 읽을 수 없습니다. 파일 손상 또는 미지원 카메라/압축 형식일 수 있습니다.") from exc
             while len(self.photos) >= MAX_SESSIONS:
@@ -56,12 +59,15 @@ class Studio:
             self.photos[photo_id] = Photo(path, filename, preview, time.monotonic(), width, height)
             return {"id": photo_id, "filename": filename,
                     "width": width, "height": height,
+                    "decoder":metadata.get("decoder","LibRaw"),
                     "preview_width": preview.shape[1], "preview_height": preview.shape[0]}
 
     def remove(self, photo_id: str):
         photo = self.photos.pop(photo_id)
         photo.path.unlink(missing_ok=True)
         photo.path.with_suffix(".npy").unlink(missing_ok=True)
+        photo.path.with_suffix(".dng").unlink(missing_ok=True)
+        brush_grid.cache_clear()
 
     def get(self, photo_id: str) -> Photo:
         photo = self.photos.get(photo_id)
@@ -91,13 +97,15 @@ class Studio:
         with self.lock:
             photo = self.get(photo_id)
             x = y = 0
+            mapping=None
             try:
                 rgb = photo.preview
                 if region is not None:
                     x, y, width, height = region
                     if x >= photo.width or y >= photo.height:
                         raise HTTPException(422, "사진 범위를 벗어난 위치입니다.")
-                    rgb = self.full(photo)[y:y + height, x:x + width]
+                    mapping=self.full(photo)
+                    rgb = mapping[y:y + height, x:x + width]
                 height, width = rgb.shape[:2]
                 headers = {"X-Image-Width": str(width), "X-Image-Height": str(height),
                            "X-Image-X": str(x), "X-Image-Y": str(y)}
@@ -110,16 +118,20 @@ class Studio:
                 return rgb.astype("<u2", copy=False).tobytes(), headers
             except (rawpy.LibRawError, ValueError) as exc:
                 raise HTTPException(422, "원본 해상도 미리보기를 만들 수 없습니다.") from exc
+            finally:
+                if mapping is not None:mapping._mmap.close()
 
-    def image(self, photo_id: str, settings: Adjustments, *, full: bool) -> bytes:
+    def image(self, photo_id: str, settings: Adjustments, *, full: bool,long_edge=0,dpi=300,quality=95) -> bytes:
         with self.lock:
             photo = self.get(photo_id)
             try:
                 rgb = self.full(photo) if full else photo.preview
                 pixel_scale = (1,1) if full else (photo.width/rgb.shape[1],photo.height/rgb.shape[0])
-                return jpeg(rgb, settings, quality=95 if full else 85, pixel_scale=pixel_scale,full_size=(photo.width,photo.height))
+                return jpeg(rgb, settings, quality=quality if full else 85, pixel_scale=pixel_scale,full_size=(photo.width,photo.height),long_edge=long_edge if full else 0,dpi=dpi)
             except (rawpy.LibRawError, ValueError) as exc:
                 raise HTTPException(422, "RAW 현상에 실패했습니다. 다른 NEF 파일을 확인해 주세요.") from exc
+            finally:
+                if full and "rgb" in locals() and isinstance(rgb,np.memmap):rgb._mmap.close()
 
     def overlay(self,photo_id,settings,selected):
         with self.lock:
@@ -140,7 +152,10 @@ class Studio:
 async def lifespan(app: FastAPI):
     with TemporaryDirectory(prefix="mydarkroom-") as directory:
         app.state.studio = Studio(Path(directory))
-        yield
+        try:
+            yield
+        finally:
+            brush_grid.cache_clear()
 
 
 app = FastAPI(title="MyDarkRoom", lifespan=lifespan)
@@ -166,7 +181,7 @@ def index():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "rawpy": rawpy.__version__, "libraw": ".".join(map(str, rawpy.libraw_version))}
+    return {"status": "ok", "rawpy": rawpy.__version__, "libraw": ".".join(map(str, rawpy.libraw_version)),"dng_converter":bool(converter_path())}
 
 
 @app.post("/api/photos")
@@ -193,6 +208,7 @@ async def upload(request: Request, file: UploadFile):
         await file.close()
         if not accepted:
             path.unlink(missing_ok=True)
+            path.with_suffix(".dng").unlink(missing_ok=True)
 
 
 @app.post("/api/photos/{photo_id}/preview")
@@ -202,10 +218,18 @@ def preview(photo_id: str, settings: Adjustments, request: Request):
 
 
 @app.post("/api/photos/{photo_id}/export")
-def export(photo_id: str, settings: Adjustments, request: Request):
-    data = request.app.state.studio.image(photo_id, settings, full=True)
+def export(photo_id: str, settings: Adjustments, request: Request,long_edge:int=Query(default=0,ge=0,le=20000),dpi:int=Query(default=300,ge=1,le=2400),quality:int=Query(default=95,ge=1,le=100)):
+    data = request.app.state.studio.image(photo_id, settings, full=True,long_edge=long_edge,dpi=dpi,quality=quality)
     return Response(data, media_type="image/jpeg",
                     headers={"Content-Disposition": 'attachment; filename="mydarkroom.jpg"'})
+
+
+@app.delete("/api/photos/{photo_id}")
+def close_photo(photo_id:str,request:Request):
+    studio=request.app.state.studio
+    with studio.lock:
+        if photo_id in studio.photos:studio.remove(photo_id)
+    return {"status":"closed"}
 
 
 @app.post("/api/photos/{photo_id}/masked-pixels")

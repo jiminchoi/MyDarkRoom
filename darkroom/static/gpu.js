@@ -18,7 +18,13 @@ uniform vec3 color;
 uniform bool monochrome;
 uniform vec3 mixer, tone;
 uniform float toneAmount, grain, grainSize;
+uniform float masterCurve[5];
+uniform bool curveEnabled;
 out vec4 result;
+float curveValue(float value) {
+  float p=clamp(value,0.,1.)*4.;int i=min(int(p),3);
+  return mix(masterCurve[i],masterCurve[i+1],p-float(i));
+}
 vec3 sample16(usampler2D tex, vec2 uv) {
   ivec2 size = textureSize(tex, 0);
   vec2 p = uv * vec2(size) - .5;
@@ -53,6 +59,7 @@ void main() {
   x = clamp(x,0.,1.);
   x = mix(1.055*pow(x,vec3(1./2.4))-.055,12.92*x,lessThanEqual(x,vec3(.0031308)));
   x = (x-.5)*exp2(l.y/100.)+.5;
+  if (!original && curveEnabled) x=vec3(curveValue(x.r),curveValue(x.g),curveValue(x.b));
   lum = dot(x,vec3(.2126,.7152,.0722));
   x = vec3(lum)+(x-vec3(lum))*(1.+c.z/100.);
   if (!original) {
@@ -90,6 +97,7 @@ export class GpuRenderer {
     if (!gl.getProgramParameter(this.program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(this.program));
     gl.useProgram(this.program);
     const buffer = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    this.buffer=buffer;
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]), gl.STATIC_DRAW);
     const position = gl.getAttribLocation(this.program, "position");
     gl.enableVertexAttribArray(position); gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
@@ -97,6 +105,8 @@ export class GpuRenderer {
     for (const name of ["source","detail","outputSize","fullSize","offset","origin","detailOrigin","scale","splitPosition","hasDetail","before","split","histogram","light","color","monochrome","mixer","tone","toneAmount","grain","grainSize","maskedSource","maskedDetail","hasMaskedSource","hasMaskedDetail"]) this.locations[name] = gl.getUniformLocation(this.program, name);
     gl.uniform1i(this.locations.source, 0); gl.uniform1i(this.locations.detail, 1);
     gl.uniform1i(this.locations.maskedSource,2);gl.uniform1i(this.locations.maskedDetail,3);
+    this.locations.masterCurve=gl.getUniformLocation(this.program,"masterCurve[0]");
+    this.locations.curveEnabled=gl.getUniformLocation(this.program,"curveEnabled");
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     this.detailTexture = null; this.texture = null; this.target = null;
   }
@@ -145,6 +155,8 @@ export class GpuRenderer {
     gl.uniform1i(u.histogram,histogram); gl.uniform1f(u.splitPosition,splitPosition);
     gl.uniform4f(u.light,settings.exposure,settings.contrast,settings.highlights,settings.shadows);
     gl.uniform3f(u.color,settings.temperature,settings.tint,settings.saturation);
+    gl.uniform1fv(u.masterCurve,[settings.curve_black ?? 0,settings.curve_shadow ?? 25,settings.curve_mid ?? 50,settings.curve_light ?? 75,settings.curve_white ?? 100].map(v=>v/100));
+    gl.uniform1i(u.curveEnabled,[settings.curve_black ?? 0,settings.curve_shadow ?? 25,settings.curve_mid ?? 50,settings.curve_light ?? 75,settings.curve_white ?? 100].some((v,i)=>v!==i*25));
     gl.uniform1i(u.monochrome,Boolean(settings.monochrome));
     const weights=[settings.mix_red ?? 30,settings.mix_green ?? 59,settings.mix_blue ?? 11];
     const total=weights.reduce((a,b)=>a+b,0);
@@ -179,5 +191,12 @@ export class GpuRenderer {
       if (gl.getError() !== gl.NO_ERROR) throw new Error("Histogram GPU readback failed");
       return pixels;
     } finally { gl.bindFramebuffer(gl.FRAMEBUFFER,null); }
+  }
+  dispose() {
+    const gl=this.gl;gl.useProgram(null);gl.bindBuffer(gl.ARRAY_BUFFER,null);gl.bindFramebuffer(gl.FRAMEBUFFER,null);
+    this.clearDetail();this.clearMasked();gl.deleteTexture(this.texture);
+    if (this.target) {gl.deleteFramebuffer(this.target.framebuffer);gl.deleteTexture(this.target.texture);}
+    gl.deleteBuffer(this.buffer);gl.deleteProgram(this.program);
+    this.texture=null;this.target=null;
   }
 }

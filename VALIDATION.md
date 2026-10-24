@@ -1,5 +1,14 @@
 # 검증 기록
 
+## 5단계: RAW 대체 로딩·톤 커브·저장·메모리
+
+- 실제 기존 NEF를 포함한 **26개 테스트 통과**. 커브, 단조 증가 검증, JPEG 장축/DPI/확대 방지, 사진 삭제 후 RAW/DNG/캐시 정리, TIFF 기종 이름의 제한된 읽기, DNG 대체 경로의 호출 인자·오류·캐시를 추가 검증했습니다. Adobe 실행은 **모의 변환기**로 검증했습니다.
+- 진단 근거: `pip index versions rawpy`에서 현재 고정된 0.27.1이 최신임을 확인했습니다. [LibRaw 공개 소스의 Nikon HE 디코더](https://github.com/LibRaw/LibRaw/blob/2caab57/src/decoders/decoders_libraw_dcrdefs.cpp)는 미지원 예외를 발생시키며, 내부 예외 매핑은 `LIBRAW_FILE_UNSUPPORTED`입니다. Z5 II HE/HE★ 실파일은 제공되지 않았으므로 해당 오류를 직접 재현하지 못했습니다. Windows에서 실제 Adobe DNG Converter의 변환과 후속 전체 현상 검증은 남아 있습니다.
+- WebGL2/CPU 브라우저 경로 모두 커브와 undo/redo, 노출 화살표 0.01, 폴더 선택 함수 호출, FileSystemDirectoryHandle 실제 writer, 960px/240DPI, 2000px, 기존 파일 이름 충돌 보존 검사를 통과했습니다. 폴더 선택 창은 자동화에서 OPFS 디렉터리 핸들로 대체했고, **실제 Windows OS 폴더 선택 UI는 수동 검증 대상**입니다.
+- GPU/CPU 수치 비교에 비선형 커브 2개를 추가하여 11개 조합에서 최대 채널 차이 1/255를 확인했습니다. 기존 프리셋/마스크/전후/확대/모바일 검증도 통과했습니다.
+- 메모리 스트레스: 실제 NEF로 사진 교체 → 그라디언트 부분 보정 → 2000px JPEG 저장을 9회 수행(처음 3회 예열). 측정 6회에서 WebGL 텍스처 3, FBO 1, 버퍼 1, 프로그램 1 및 DOM 노드 801이 일정했습니다. 최종 코드의 서버 RSS는 측정 구간에서 340,430,848–403,599,360바이트를 주기적으로 오갔고 마지막은 397,336,576바이트로 첫 측정 403,587,072바이트보다 작았습니다. 브라우저 JS/백킹 저장소는 2,715,944 → 2,791,448바이트였습니다. 유한 검사의 안정화이며 절대적인 무누수 증명은 아닙니다. Windows GPU 메모리/실제 HE 변환기의 메모리는 이 수치에 포함되지 않습니다.
+- 명령: `python scripts/browser_stage5_check.py --nef /path/photo.NEF --chromium /usr/bin/chromium --software-gl --pid 서버PID`. `requirements-browser.txt`의 별도 검증 도구가 필요합니다.
+
 ## 4단계: 브러시·그라디언트·색상/휘도 마스크
 
 - 실제 NEF를 포함한 단위/API 테스트 **20개 통과**. 그라디언트 위치/반전, RGB/휘도 선택, 브러시 경계/지우개, 원본 좌표 크롭 일치, 불투명도/레이어 순서, 잘못된 마스크 거절, 부분 보정의 JPEG 반영을 확인했습니다.
