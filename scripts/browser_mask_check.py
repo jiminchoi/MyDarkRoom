@@ -55,7 +55,8 @@ def workflow(browser,args,cpu=False):
     page.locator("#fit").click()
     page.locator("#brush-erase").check();stroke((.49,.5),(.51,.5));idle()
     assert states[-1]["masks"][0]["strokes"][-1]["erase"]
-    add("gradient");stroke((.5,.35),(.5,.65));slider("local-shadows",35);page.locator("#mask-invert").check();idle()
+    add("gradient");stroke((.5,.35),(.5,.65));slider("local-shadows",35);slider("density-2",65);page.locator("#mask-invert").check();idle()
+    assert states[-1]["masks"][1]["density"][2]==.65
     add("color")
     page.locator("#mask-pick").click()
     box=page.locator("#canvas").bounding_box()
@@ -75,9 +76,17 @@ def workflow(browser,args,cpu=False):
     page.locator("#redo").click();idle()
     assert page.locator("#mask-select option").count()==3
     page.locator("#undo").click();idle()
+    add("radial");stroke((.5,.5),(.65,.5));slider("local-exposure",.4);slider("density-2",80);idle()
+    assert states[-1]["masks"][-1]["kind"]=="radial"
+    assert states[-1]["masks"][-1]["density"][2]==.8
+    page.locator("#undo").click();idle();assert float(page.locator("#density-2").input_value())==50
+    page.locator("#redo").click();idle();assert float(page.locator("#density-2").input_value())==80
+    page.locator("#density-reset").click();idle();assert float(page.locator("#density-2").input_value())==50
+    page.locator("#undo").click();idle();assert float(page.locator("#density-2").input_value())==80
+    assert page.locator("#mask-select option").count()==5
     # A global preset must not remove photo-specific masks.
     page.locator("#preset").select_option("mono");idle()
-    assert page.locator("#mask-select option").count()==4
+    assert page.locator("#mask-select option").count()==5
     page.locator("#compare").dispatch_event("keydown",{"key":"Enter"})
     assert page.locator("#compare-label").is_visible()
     assert page.locator("#mask-overlay").evaluate("c=>!c.getContext('2d').getImageData(Math.floor(c.width/2),Math.floor(c.height/2),1,1).data[3]")
@@ -88,12 +97,12 @@ def workflow(browser,args,cpu=False):
         page.locator("#export").click();page.locator("#export-start").click()
     with Image.open(BytesIO(Path(downloaded.value.path()).read_bytes())) as image:
         image.load();assert image.size==(photo["width"],photo["height"]) and image.info["icc_profile"]
-    assert len(states[-1]["masks"])==4
+    assert len(states[-1]["masks"])==5
     page.locator("#reset").click()
     assert page.locator("#mask-select option").count()==0
     assert not errors,errors
     assert page.locator("#error").is_hidden(),page.locator("#error").inner_text()
-    print(f"{'CPU' if cpu else 'WebGL2'}: brush, eraser, gradient, color/luma range, local controls, overlay, undo/redo, preset preservation and full-size JPEG passed",flush=True)
+    print(f"{'CPU' if cpu else 'WebGL2'}: brush, eraser, linear/radial density profiles, color/luma range, local controls, overlay, undo/redo, preset preservation and full-size JPEG passed",flush=True)
     page.close()
 
 

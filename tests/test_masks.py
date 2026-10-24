@@ -74,6 +74,39 @@ def test_invalid_masks_are_rejected():
     with pytest.raises(ValidationError):Adjustments(masks=[{"kind":"color"}]*9)
 
 
+def test_radial_is_circular_in_original_pixels_and_inverts():
+    raw=np.zeros((100,200,3),dtype=np.float32)
+    mask=Mask(kind="radial",start={"x":.5,"y":.5},end={"x":.7,"y":.5})
+    # Both offsets are 20 source pixels on a rectangular image.
+    weight=mask_weight(mask,raw,np.array([[.5,.6,.5,.9]],dtype=np.float32),np.array([[.5,.5,.7,.5]],dtype=np.float32),(200,100))
+    assert weight[0,0]==1 and weight[0,3]==0
+    assert weight[0,1]==pytest.approx(weight[0,2],abs=1e-6)
+    assert weight[0,1]==pytest.approx(.5,abs=1e-6)
+    mask.invert=True
+    inverted=mask_weight(mask,raw,np.array([[.5,.9]]),np.array([[.5,.5]]),(200,100))
+    assert np.allclose(inverted,[[0,1]])
+
+
+@pytest.mark.parametrize("kind",["gradient","radial"])
+def test_distance_density_stops_and_radial_crop_match(kind):
+    mask=Mask(kind=kind,start={"x":.2,"y":.5},end={"x":.8,"y":.5},density=[.1,.8,.2,.9,.3],adjustments={"exposure":1})
+    xx=np.array([[.2,.35,.5,.65,.8]],dtype=np.float32)
+    weights=mask_weight(mask,np.zeros((1,5,3),dtype=np.float32),xx,np.full((1,5),.5),(200,100))
+    assert np.allclose(weights,[mask.density],atol=1e-6)
+    raw=np.full((100,200,3),10000,dtype=np.uint16)
+    full=bake_masks(raw,[mask],full_size=(200,100))
+    crop=bake_masks(raw[20:85,40:160],[mask],origin=(40,20),full_size=(200,100))
+    assert np.array_equal(crop,full[20:85,40:160])
+    for values in [[0,1],[0,0,0,0,1.1],[0,0,float('nan'),0,1]]:
+        with pytest.raises(ValidationError):Mask(kind=kind,density=values)
+
+
+def test_radial_profile_does_not_spill_outside_circle():
+    mask=Mask(kind="radial",start={"x":.5,"y":.5},end={"x":.6,"y":.5},density=[1,1,1,1,1])
+    weight=mask_weight(mask,np.zeros((1,2,3),dtype=np.float32),np.array([[.5,.9]]),np.array([[.5,.5]]),(200,100))
+    assert np.array_equal(weight,[[1,0]])
+
+
 def test_mask_api_linear_detail_overlay_and_export(monkeypatch):
     raw=np.full((60,100,3),10000,dtype=np.uint16)
     def develop(path,*,preview,metadata=None):
@@ -105,3 +138,17 @@ def test_mask_api_linear_detail_overlay_and_export(monkeypatch):
         baseline=np.asarray(render(raw,Adjustments()))
         assert np.max(abs(exported_pixels[20,5].astype(int)-baseline[20,5].astype(int)))<=3
         assert np.all(exported_pixels[20,95]>exported_pixels[20,5]+10)
+        radial={"masks":[{"kind":"radial","start":{"x":.5,"y":.5},"end":{"x":.7,"y":.5},
+            "density":[1,.8,.3,.1,0],"adjustments":{"exposure":1}}]}
+        data=client.post(root+"/masked-pixels",json=radial)
+        assert data.status_code==200
+        pixels=np.frombuffer(data.content,dtype="<u2").reshape(raw.shape)
+        assert pixels[30,50,0]>19500 and np.array_equal(pixels[0,0],raw[0,0])
+        detail=client.post(root+"/masked-detail?x=40&y=20&width=20&height=20",json=radial)
+        assert np.array_equal(np.frombuffer(detail.content,dtype="<u2").reshape(20,20,3),pixels[20:40,40:60])
+        overlay=client.post(root+"/mask-overlay?selected=0",json=radial)
+        alpha=np.asarray(Image.open(BytesIO(overlay.content)))[...,3]
+        assert alpha[30,50]>100 and alpha[0,0]==0
+        exported=client.post(root+"/export",json=radial)
+        image=np.asarray(Image.open(BytesIO(exported.content)))
+        assert np.all(image[30,50]>image[0,0]+15)

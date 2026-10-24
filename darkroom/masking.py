@@ -35,7 +35,7 @@ class LocalAdjustments(Model):
 
 class Mask(Model):
     name: str = Field(default="마스크", max_length=60)
-    kind: Literal["brush", "gradient", "color", "luminance"]
+    kind: Literal["brush", "gradient", "radial", "color", "luminance"]
     enabled: bool = True
     invert: bool = False
     opacity: float = Field(default=1, ge=0, le=1)
@@ -46,6 +46,7 @@ class Mask(Model):
     low: float = Field(default=.2, ge=0, le=1)
     high: float = Field(default=.8, ge=0, le=1)
     feather: float = Field(default=.15, ge=0, le=1)
+    density: list[float] | None = Field(default=None,min_length=5,max_length=5)
     strokes: list[Stroke] = Field(default_factory=list, max_length=64)
     adjustments: LocalAdjustments = Field(default_factory=LocalAdjustments)
 
@@ -53,6 +54,8 @@ class Mask(Model):
     def validate_ranges(self):
         if self.low > self.high or any(not 0 <= v <= 1 for v in self.color):
             raise ValueError("Invalid mask range/color")
+        if self.density is not None and any(not 0<=v<=1 for v in self.density):
+            raise ValueError("Gradient densities must be between 0 and 1")
         if sum(len(s.points) for s in self.strokes) > 2048:
             raise ValueError("Brush limit: 2048 points per mask")
         return self
@@ -106,16 +109,32 @@ def sample_grid(grid, xx, yy):
     return (a*(1-fx)+b*fx)*(1-fy)+(c*(1-fx)+d*fx)*fy
 
 
+def gradient_density(distance,mask):
+    position=ramp(0,1,distance)
+    if mask.density is None:
+        value=1-position if mask.kind=="radial" else position
+    else:
+        # Controls correspond exactly to 0/25/50/75/100% of geometric distance.
+        # Using the old easing curve as the interpolation axis preserves its default.
+        knots=np.array([0,.15625,.5,.84375,1],dtype=np.float32)
+        value=np.interp(position,knots,mask.density).astype(np.float32)
+    return np.where(distance<=1,value,0) if mask.kind=="radial" else value
+
+
 def mask_weight(mask: Mask, original, xx, yy, full_size):
     if mask.kind=="brush":
         serialized=json.dumps([s.model_dump() for s in mask.strokes],sort_keys=True)
         weight=sample_grid(brush_grid(serialized,*full_size),xx,yy)
-    elif mask.kind=="gradient":
+    elif mask.kind in ("gradient","radial"):
         width,height=full_size
         ax,ay=mask.start.x*width,mask.start.y*height
         dx,dy=(mask.end.x-mask.start.x)*width,(mask.end.y-mask.start.y)*height
-        t=((xx*width-ax)*dx+(yy*height-ay)*dy)/max(dx*dx+dy*dy,1e-12)
-        weight=ramp(0,1,t)
+        if mask.kind=="radial":
+            radius=max(float(np.hypot(dx,dy)),1)
+            t=np.sqrt((xx*width-ax)**2+(yy*height-ay)**2)/radius
+        else:
+            t=((xx*width-ax)*dx+(yy*height-ay)*dy)/max(dx*dx+dy*dy,1e-12)
+        weight=gradient_density(t,mask)
     else:
         display=np.clip(original,0,1)
         display=np.where(display<=.0031308,display*12.92,1.055*display**(1/2.4)-.055)
