@@ -15,7 +15,8 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
-from .imaging import Adjustments, develop, jpeg
+from .imaging import Adjustments, develop, jpeg,render
+from .geometry import estimate_geometry
 from .masking import bake_masks, mask_weight,brush_grid
 from .raw_support import RawCompatibilityError,converter_path
 
@@ -114,7 +115,7 @@ class Studio:
                     if linear:
                         rgb=bake_masks(rgb,settings.masks,origin=(x,y),pixel_scale=scale,full_size=(photo.width,photo.height))
                     else:
-                        return jpeg(rgb, settings, quality=95, origin=(x,y),pixel_scale=scale,full_size=(photo.width,photo.height)), headers
+                        return jpeg(rgb, settings, quality=95, origin=(x,y),pixel_scale=scale,full_size=(photo.width,photo.height),geometry=False), headers
                 return rgb.astype("<u2", copy=False).tobytes(), headers
             except (rawpy.LibRawError, ValueError) as exc:
                 raise HTTPException(422, "원본 해상도 미리보기를 만들 수 없습니다.") from exc
@@ -181,7 +182,7 @@ def index():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "rawpy": rawpy.__version__, "libraw": ".".join(map(str, rawpy.libraw_version)),"dng_converter":bool(converter_path()),"app_version":"0.5.2"}
+    return {"status": "ok", "rawpy": rawpy.__version__, "libraw": ".".join(map(str, rawpy.libraw_version)),"dng_converter":bool(converter_path()),"app_version":"0.6.0"}
 
 
 @app.post("/api/photos")
@@ -283,3 +284,14 @@ def detail_cpu(photo_id: str, settings: Adjustments, request: Request,
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
+
+@app.post("/api/photos/{photo_id}/auto-geometry")
+def auto_geometry(photo_id:str,request:Request,mode:str=Query(pattern="^(level|upright)$")):
+    studio=request.app.state.studio
+    with studio.lock:
+        photo=studio.get(photo_id)
+        image=render(photo.preview,Adjustments())
+        try:return estimate_geometry(image,mode)
+        except ValueError as exc:raise HTTPException(422,str(exc)) from exc
+        except ImportError as exc:raise HTTPException(503,"자동 분석 모듈을 불러오지 못했습니다. start_windows.cmd로 패키지를 설치한 뒤 다시 실행하세요.") from exc
+        finally:image.close()

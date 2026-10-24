@@ -1,4 +1,6 @@
 import { GpuRenderer } from "./gpu.js";
+import {GeometryEditor,geometryDefaults} from "./geometry.js";
+let geometryEditor;
 import { MaskEditor } from "./masks.js";
 import {ExportDialog,saveToDirectory} from "./export.js";
 let maskEditor, maskBusy=false, appliedMaskKey="[]", maskTimer, maskGeneration=0, maskAbort;
@@ -8,7 +10,7 @@ let overlayTimer, overlayGeneration=0, overlayAbort, overlayKey="";
 const $ = (id) => document.getElementById(id);
 const inputs = [...document.querySelectorAll('#controls input[type="range"]')];
 const defaults = {...Object.fromEntries(inputs.map((input) => [input.id, Number(input.defaultValue)])), monochrome:false};
-const settings = (includeMasks=true) => ({...Object.fromEntries(inputs.map((input) => [input.id, Number(input.value)])), monochrome:$("monochrome").checked,masks:includeMasks ? maskEditor?.masks || [] : []});
+const settings = (includeMasks=true) => ({...Object.fromEntries(inputs.map((input) => [input.id, Number(input.value)])), monochrome:$("monochrome").checked,geometry:geometryEditor?.value || geometryDefaults(),masks:includeMasks ? maskEditor?.masks || [] : []});
 let canvas = $("preview"), gpu, context;
 let photo = null, opening = false, exporting = false, comparing = false, split = false;
 let mode = "fit", pan = [0,0], detail = null, cpuOriginal = null, cpuEdited = null;
@@ -22,8 +24,10 @@ function status(message) { $("status").textContent = message; }
 function availability() {
   $("controls").disabled = $("preset-tools").disabled = !photo || opening || exporting;
   if (maskEditor) $("mask-tools").disabled=!photo || opening || exporting;
+  if(geometryEditor){$("geometry-tools").disabled=!photo||opening||exporting;$("mask-tools").disabled ||= geometryEditor.active;}
   historyButtons();
   for (const id of ["reset","compare","export","fit","zoom","split"]) $(id).disabled = !photo || opening || exporting;
+  $("zoom").disabled ||= Boolean(geometryEditor?.active);
   $("export").disabled ||= maskBusy;
   $("split-position").disabled = !photo || opening || exporting;
   $("open").disabled = $("choose").disabled = opening || exporting;
@@ -93,6 +97,8 @@ function view() {
 }
 function render() {
   if (!photo || !canvas.width || !canvas.height) return;
+  $("geometry-view").hidden=!geometryEditor?.active;
+  if(geometryEditor?.active){geometryEditor.draw($("geometry-view").getContext("2d"),canvas.width,canvas.height,{before:comparing,split,fraction:Number($("split-position").value)/100});$("mask-overlay").getContext("2d").clearRect(0,0,canvas.width,canvas.height);$("compare-label").hidden=!comparing;$("split-line").hidden=!split||comparing;$("split-line").style.left=$("split-position").value+"%";return;}
   const v = view(), fraction = Number($("split-position").value)/100;
   if (gpu) gpu.draw(settings(false),v,{before:comparing,split,splitPosition:fraction});
   else if (cpuOriginal) {
@@ -121,6 +127,7 @@ function resize() {
   const rect = $("canvas").getBoundingClientRect();
   canvas.width = Math.max(1,Math.round((rect.width-2)*devicePixelRatio));
   canvas.height = Math.max(1,Math.round((rect.height-2)*devicePixelRatio));
+  $("geometry-view").width=canvas.width;$("geometry-view").height=canvas.height;
   $("mask-overlay").width=canvas.width;$("mask-overlay").height=canvas.height;
   render(); if (mode === "zoom") scheduleDetail();
 }
@@ -146,6 +153,7 @@ async function openFile(file) {
     comparing = false; split = false; mode = "fit"; pan = [0,0];
     clearTimeout(maskTimer);clearTimeout(overlayTimer);overlayGeneration++;overlayAbort?.abort();
     maskEditor.masks=[];maskEditor.setOverlay(null);overlayKey="";appliedMaskKey="[]";maskGeneration++;maskAbort?.abort();maskBusy=false;
+    geometryEditor.clear();
     setControls(defaults); history=[settings()]; historyIndex=0; $("preset").value="base"; updateOutputs();
     $("empty").hidden = true; canvas.hidden = false;$("mask-overlay").hidden=false;
     $("filename").textContent = next.filename;
@@ -162,12 +170,14 @@ function scheduleEdits(event) {
   else if (gpu) { queueRender(); status(gpu.software ? "보정 완료 · WebGL2 소프트웨어" : "보정 완료 · WebGL2 미리보기"); scheduleHistogram(); }
   else { clearTimeout(editTimer); status("보정 적용 중…"); editTimer=setTimeout(refreshCpu,100); }
   scheduleOverlay();
+  availability();
+  geometryEditor?.refresh(settings(),defaults);
 }
 async function refreshCpu() {
   if (!photo || cpuRunning || opening || exporting || gpu) return;
   cpuRunning = true; const version=revision, id=photo.id;
   try {
-    const image=await createImageBitmap(await (await postImage(id,"preview",settings())).blob());
+    const image=await createImageBitmap(await (await postImage(id,"preview",{...settings(),geometry:geometryDefaults()})).blob());
     if (version === revision && photo.id === id) {
       if (cpuEdited !== cpuOriginal) closeBitmap(cpuEdited);
       cpuEdited=image; clearDetail(); render(); scheduleHistogram(); scheduleDetail(); status("보정 완료 · CPU 미리보기");
@@ -181,7 +191,12 @@ function updateHistogram() {
   if (!photo || opening || histogramRunning || maskBusy) return;
   try {
     let pixels;
-    if (gpu) { pixels=gpu.histogram(settings(false),view()); render(); }
+    if (geometryEditor?.active && geometryEditor.bitmap) {
+      const image=geometryEditor.bitmap,c=geometryEditor.editing?geometryEditor.value.crop:[0,0,1,1];
+      const offscreen=document.createElement("canvas");offscreen.width=Math.max(1,Math.round(image.width*c[2]));offscreen.height=Math.max(1,Math.round(image.height*c[3]));
+      const ctx=offscreen.getContext("2d");ctx.drawImage(image,c[0]*image.width,c[1]*image.height,c[2]*image.width,c[3]*image.height,0,0,offscreen.width,offscreen.height);pixels=ctx.getImageData(0,0,offscreen.width,offscreen.height).data;
+    }
+    else if (gpu) { pixels=gpu.histogram(settings(false),view()); render(); }
     else {
       const offscreen=document.createElement("canvas"); offscreen.width=photo.preview_width; offscreen.height=photo.preview_height;
       const ctx=offscreen.getContext("2d"); ctx.drawImage(cpuEdited,0,0); pixels=ctx.getImageData(0,0,offscreen.width,offscreen.height).data;
@@ -216,7 +231,7 @@ function updateViewButtons() {
   $("canvas").classList.toggle("zoomed",mode === "zoom");
 }
 function setMode(next, point) {
-  if (!photo || opening || exporting) return;
+  if (!photo || opening || exporting || (next==="zoom"&&geometryEditor?.active)) return;
   const v=view();
   if (next === "zoom") {
     const center=point || [canvas.width/2,canvas.height/2];
@@ -262,7 +277,7 @@ async function loadDetail() {
 }
 let drag=null;
 $("canvas").addEventListener("pointerdown",(event) => {
-  if (mode !== "zoom" || !photo || opening || exporting || event.target.closest("#busy")) return;
+  if (mode !== "zoom" || !photo || opening || exporting || event.target.closest("#busy") || geometryEditor?.active) return;
   event.preventDefault(); $("canvas").setPointerCapture(event.pointerId);
   drag={x:event.clientX,y:event.clientY,pan:[...view().origin]};
 });
@@ -278,7 +293,7 @@ $("fit").onclick=() => setMode("fit"); $("zoom").onclick=() => {if (mode !== "zo
 $("split").onclick=() => {split=!split;comparing=false;updateViewButtons();render();};
 $("split-position").oninput=queueRender;
 inputs.forEach((input) => input.addEventListener("input",scheduleEdits));
-$("reset").onclick=() => applySettings({...defaults,masks:[]});
+$("reset").onclick=() => applySettings({...defaults,masks:[],geometry:geometryDefaults()});
 $("dismiss").onclick=() => {$("error").hidden=true;};
 $("open").onclick=$("choose").onclick=() => $("file").click();
 $("file").onchange=() => openFile($("file").files[0]);
@@ -292,7 +307,7 @@ $("compare").addEventListener("pointerdown",(event) => {$("compare").setPointerC
 for (const name of ["pointerup","pointercancel","lostpointercapture","blur"]) $("compare").addEventListener(name,() => compare(false));
 $("compare").addEventListener("keydown",(event) => {if ([" ","Enter"].includes(event.key)) {event.preventDefault();compare(true);}});
 $("compare").addEventListener("keyup",() => compare(false));
-const exportDialog=new ExportDialog(()=>photo,async options=>{
+const exportDialog=new ExportDialog(()=>{if(!photo)return null;const c=geometryEditor?.value.crop || [0,0,1,1];return {...photo,width:Math.round(photo.width*c[2]),height:Math.round(photo.height*c[3])};},async options=>{
   if (!photo || opening || exporting || maskBusy) return;
   compare(false);exporting=true;availability();busy("원본 해상도로 현상하고 JPEG를 만들고 있어요…");
   try {
@@ -354,6 +369,7 @@ function setControls(v) {
  v=curveDefaults(v);
  for (const input of inputs) input.value=v[input.id];
  $("monochrome").checked=v.monochrome;
+ if (v.geometry && geometryEditor) geometryEditor.set(v.geometry);
  if (Array.isArray(v.masks) && maskEditor) maskEditor.masks=v.masks;
 }
 function historyButtons() {
@@ -484,7 +500,7 @@ function imagePoint(event) {
 }
 let maskPointer=null;
 $("canvas").addEventListener("pointerdown",event=>{
- if (!photo || opening || exporting || !maskEditor.active || event.button!==0) return;
+ if (!photo || opening || exporting || !maskEditor.active || geometryEditor?.active || event.button!==0) return;
  if (!maskEditor.down(imagePoint(event))) return;
  event.preventDefault();event.stopImmediatePropagation();maskPointer=event.pointerId;$("canvas").setPointerCapture(event.pointerId);
 },true);
@@ -537,7 +553,14 @@ document.addEventListener("keydown",event=>{
 drawCurve();
 window.addEventListener("pagehide",event=>{
  if (event.persisted) return;
+ geometryEditor?.clear();
  worker.terminate();gpu?.dispose();
  if (cpuEdited!==cpuOriginal) closeBitmap(cpuEdited);closeBitmap(cpuOriginal);
  if (detail) {closeBitmap(detail.original);closeBitmap(detail.edited);}maskEditor?.setOverlay(null);
 });
+
+geometryEditor=new GeometryEditor({getPhoto:()=>photo,onChange:commit=>{mode="fit";clearDetail();availability();scheduleEdits();if(commit)record();},onView:()=>{queueRender();scheduleHistogram();},onError:error,onMessage:status});
+let geometryPointer=null;
+$("canvas").addEventListener("pointerdown",event=>{if(opening||exporting||!photo||event.button!==0)return;if(geometryEditor.down(event)){event.preventDefault();event.stopImmediatePropagation();geometryPointer=event.pointerId;$("canvas").setPointerCapture(event.pointerId);}},true);
+$("canvas").addEventListener("pointermove",event=>{if(geometryPointer!==event.pointerId)return;event.preventDefault();event.stopImmediatePropagation();geometryEditor.move(event);},true);
+for(const name of ["pointerup","pointercancel","lostpointercapture"])$("canvas").addEventListener(name,event=>{if(geometryPointer!==event.pointerId)return;event.stopImmediatePropagation();geometryPointer=null;geometryEditor.up(name==="pointercancel");},true);

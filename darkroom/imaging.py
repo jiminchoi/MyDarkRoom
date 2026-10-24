@@ -7,6 +7,7 @@ import rawpy
 from PIL import Image, ImageCms
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .masking import Mask, bake_masks
+from .geometry import Geometry,apply_geometry
 from .raw_support import compatible_develop
 
 
@@ -27,6 +28,7 @@ class Adjustments(BaseModel):
     tone_amount: float = Field(default=0, ge=0, le=100)
     grain: float = Field(default=0, ge=0, le=100)
     grain_size: float = Field(default=1, ge=1, le=8)
+    geometry: Geometry = Field(default_factory=Geometry)
     masks: list[Mask] = Field(default_factory=list, max_length=8)
     curve_black: float = Field(default=0,ge=0,le=100)
     curve_shadow: float = Field(default=25,ge=0,le=100)
@@ -140,9 +142,10 @@ def render(rgb: np.ndarray, settings: Adjustments, *, origin=(0, 0), pixel_scale
     return Image.fromarray(result)
 
 
-def jpeg(rgb: np.ndarray, settings: Adjustments, *, quality: int, origin=(0,0), pixel_scale=(1,1), full_size=None,long_edge=0,dpi=300) -> bytes:
+def jpeg(rgb: np.ndarray, settings: Adjustments, *, quality: int, origin=(0,0), pixel_scale=(1,1), full_size=None,long_edge=0,dpi=300,geometry=True) -> bytes:
     output = BytesIO()
     image=render(rgb, settings, origin=origin, pixel_scale=pixel_scale,full_size=full_size)
+    if geometry:image=apply_geometry(image,settings.geometry)
     if long_edge and max(image.size)>long_edge:
         image.thumbnail((long_edge,long_edge),Image.Resampling.LANCZOS)
     image.save(output, format="JPEG", quality=quality,dpi=(dpi,dpi),subsampling=0, icc_profile=SRGB_PROFILE)
