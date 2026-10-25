@@ -41,3 +41,4 @@ input[type=range]::-moz-range-thumb{width:18px;height:13px;border-radius:5px}
 .curve-actions{display:flex;gap:10px;align-items:center;margin:-6px 0 16px}.curve-actions button,#auto-light{font-size:11px;padding:8px 10px}#auto-light{margin-bottom:20px}.curve-actions small{font-size:10px;line-height:1.6}
 #tone-curve{cursor:crosshair;height:180px;margin-bottom:14px}
 @media(max-width:760px){body{overflow-x:hidden}main{min-height:0}.workspace{height:auto}.canvas{height:55dvh;min-height:260px}.note{margin-top:12px}}
+.zoom-tools{align-items:center;flex-wrap:wrap}.zoom-slider{display:flex;align-items:center;gap:7px;margin:0 0 0 6px;white-space:nowrap;font-size:10px}.zoom-slider input[type=range]{width:110px;margin:8px 0;height:3px}.zoom-slider output{width:38px;text-align:right;font-size:10px}.view-tools{flex-wrap:wrap}.zoom-slider input:disabled{opacity:.4}@media(max-width:760px){.zoom-slider input[type=range]{width:90px}.zoom-slider{margin-left:2px}.zoom-tools{gap:5px}}

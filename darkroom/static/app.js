@@ -1,4 +1,4 @@
-import {forwardMatrix,multiply,transform} from "./geometry-math.js";
+import {forwardMatrix,multiply,transform,gpuGeometry,viewAt,anchoredPan,visibleRegion,projectedRegion,containsRegion} from "./geometry-math.js";
 import {curveLut,curvePoints,validCurve} from "./curves.js";
 import { GpuRenderer } from "./gpu.js";
 import {GeometryEditor,geometryDefaults} from "./geometry.js";
@@ -16,6 +16,7 @@ const defaults = {...Object.fromEntries(inputs.map((input) => [input.id, Number(
 const settings = (includeMasks=true) => ({curve_points:customCurve ? structuredClone(customCurve) : null,...Object.fromEntries(inputs.map((input) => [input.id, Number(input.value)])), monochrome:$("monochrome").checked,geometry:geometryEditor?.value || geometryDefaults(),masks:includeMasks ? maskEditor?.masks || [] : []});
 let canvas = $("preview"), gpu, context;
 let photo = null, opening = false, exporting = false, comparing = false, split = false;
+let zoomScale=1,zoomInteracting=false,panSpace=false,detailCache=null;
 let mode = "fit", pan = [0,0], detail = null, cpuOriginal = null, cpuEdited = null;
 let revision = 0, detailRevision = 0, editTimer, detailTimer, histogramTimer, frame, outputFrame;
 let interacting=false,geometryRenderedRevision=-1;
@@ -33,7 +34,8 @@ function availability() {
   if(geometryEditor){$("geometry-tools").disabled=!photo||opening||exporting;$("mask-tools").disabled ||= geometryEditor.active&&geometryEditor.editing;}
   historyButtons();
   for (const id of ["reset","compare","export","fit","zoom","split"]) $(id).disabled = !photo || opening || exporting;
-  $("zoom").disabled ||= Boolean(geometryEditor?.active);
+  $("zoom").disabled ||= Boolean(geometryEditor?.active&&geometryEditor.editing);
+  $("zoom-scale").disabled=!photo||opening||exporting||Boolean(geometryEditor?.active&&geometryEditor.editing);
   $("export").disabled ||= maskBusy;
   $("split-position").disabled = !photo || opening || exporting;
   $("open").disabled = $("choose").disabled = opening || exporting;
@@ -60,7 +62,7 @@ async function linearData(response,channels=3) {
   await checked(response);
   const buffer = await response.arrayBuffer();
   const data = {width:Number(response.headers.get("X-Image-Width")), height:Number(response.headers.get("X-Image-Height")),
-    x:Number(response.headers.get("X-Image-X")), y:Number(response.headers.get("X-Image-Y")), pixels:new Uint16Array(buffer)};
+    x:Number(response.headers.get("X-Image-X")), y:Number(response.headers.get("X-Image-Y")), span:[Number(response.headers.get("X-Region-Width")||response.headers.get("X-Image-Width")),Number(response.headers.get("X-Region-Height")||response.headers.get("X-Image-Height"))], pixels:new Uint16Array(buffer)};
   if (!data.width || !data.height || buffer.byteLength !== data.width*data.height*channels*2) throw new Error("미리보기 데이터가 올바르지 않습니다.");
   return data;
 }
@@ -80,7 +82,7 @@ async function ensureStructure(force=false){
    }
    await structurePromise;
  }
- if(!gpu||photo?.id!==id||mode!=="zoom"||!hasSpatial()||!canvas.dataset.detail)return;
+ if(!gpu||photo?.id!==id||mode!=="zoom"||detailCache?.sampled||!hasSpatial()||!canvas.dataset.detail)return;
  const key=id+":"+canvas.dataset.detail;if(key===structureDetailKey)return;structureDetailKey=key;
  structureDetailAbort?.abort();const controller=new AbortController();structureDetailAbort=controller;
  const [x,y,width,height]=canvas.dataset.detail.split(',');
@@ -103,7 +105,7 @@ function closeBitmap(image) { image?.close(); }
 function clearDetail() {
   structureDetailAbort?.abort();structureDetailKey="";detailRevision++; detailAbort?.abort(); clearTimeout(detailTimer);
   if (detail) { closeBitmap(detail.original); closeBitmap(detail.edited); }
-  detail = null; gpu?.clearDetail(); delete canvas.dataset.detail;
+  detail = null;detailCache=null; gpu?.clearDetail(); delete canvas.dataset.detail;
 }
 async function loadCpu(next) {
   const image = await createImageBitmap(await (await postImage(next.id,"preview",defaults)).blob());
@@ -120,25 +122,26 @@ $("canvas").addEventListener("webglcontextlost", async (event) => {
   error("GPU 연결이 해제되어 CPU 미리보기로 전환했습니다.");
 }, true);
 
+function geometryState(){return photo&&geometryEditor?.active?gpuGeometry([photo.width,photo.height],geometryEditor.value,geometryEditor.editing):null;}
+function outputSize(){return geometryState()?.size||[photo?.width||1,photo?.height||1];}
 function view() {
-  if (!photo) return {scale:1,origin:[0,0],offset:[0,0]};
-  const scale = mode === "fit" ? Math.min(canvas.width/photo.width,canvas.height/photo.height) : 1;
-  const offset = [Math.max(0,(canvas.width-photo.width*scale)/2),Math.max(0,(canvas.height-photo.height*scale)/2)];
-  if (mode === "zoom") pan = pan.map((v,i) => Math.max(0,Math.min(Math.round(v),Math.max(0,[photo.width,photo.height][i]-[canvas.width,canvas.height][i]))));
-  return {scale,origin:mode === "fit" ? [0,0] : pan,offset};
+ if(!photo)return {scale:1,origin:[0,0],offset:[0,0]};
+ const size=outputSize(),viewport=[canvas.width,canvas.height],scale=mode==="fit"?Math.min(2,viewport[0]/size[0],viewport[1]/size[1]):zoomScale;
+ const v=viewAt(size,viewport,scale,mode==="fit"?[0,0]:pan);if(mode!=="fit")pan=v.origin;return v;
 }
 function render() {
   if (!photo || !canvas.width || !canvas.height) return;
+  canvas.dataset.view=JSON.stringify({...view(),size:outputSize()});
   $("mask-overlay").hidden=comparing;
   $("geometry-view").hidden=!geometryEditor?.active||(Boolean(gpu)&&!geometryEditor.editing);
   if(geometryEditor?.active){
     if(gpu){
-      const state=geometryEditor.gpuState(canvas.width,canvas.height);
+      const state={geometry:geometryState(),view:view()};
       gpu.draw(settings(false),state.view,{before:comparing,split,splitPosition:Number($("split-position").value)/100,geometry:state.geometry,overlay:$("mask-show").checked});
       if(geometryRenderedRevision!==revision){geometryRenderedRevision=revision;status("기하 보정 미리보기 완료 · WebGL2");}
     }
-    geometryEditor.draw($("geometry-view").getContext("2d"),canvas.width,canvas.height,{before:comparing,split,fraction:Number($("split-position").value)/100,guidesOnly:Boolean(gpu)});
-    const state=geometryEditor.gpuState(canvas.width,canvas.height),m=forwardMatrix([photo.width,photo.height],geometryEditor.value);
+    if(!gpu||geometryEditor.editing)geometryEditor.draw($("geometry-view").getContext("2d"),canvas.width,canvas.height,{before:comparing,split,fraction:Number($("split-position").value)/100,guidesOnly:Boolean(gpu),view:view(),detail:needsDetail()?detail:null});
+    const state={geometry:geometryState(),view:view()},m=forwardMatrix([photo.width,photo.height],geometryEditor.value);
     const project=p=>{const q=transform(m,[p.x*photo.width,p.y*photo.height]);return [state.view.offset[0]+(q[0]-state.geometry.cropOrigin[0])*state.view.scale,state.view.offset[1]+(q[1]-state.geometry.cropOrigin[1])*state.view.scale];};
     drawMaskOverlay(state.view,project);
     $("compare-label").hidden=!comparing;$("split-line").hidden=!split||comparing;$("split-line").style.left=$("split-position").value+"%";
@@ -151,9 +154,9 @@ function render() {
     context.fillStyle = "#101212"; context.fillRect(0,0,canvas.width,canvas.height);
     const draw = (original) => {
       const image = original ? cpuOriginal : cpuEdited;
-      context.imageSmoothingEnabled = mode !== "zoom";
+      context.imageSmoothingEnabled = v.scale<1;
       context.drawImage(image,v.offset[0]-v.origin[0]*v.scale,v.offset[1]-v.origin[1]*v.scale,photo.width*v.scale,photo.height*v.scale);
-      if (detail && mode === "zoom") {
+      if (detail && needsDetail()) {
         context.imageSmoothingEnabled = false;
         context.drawImage(original ? detail.original : detail.edited,v.offset[0]+(detail.x-v.origin[0])*v.scale,v.offset[1]+(detail.y-v.origin[1])*v.scale,detail.width*v.scale,detail.height*v.scale);
       }
@@ -176,7 +179,7 @@ function resize() {
   canvas.height = Math.max(1,Math.round((rect.height-2)*devicePixelRatio));
   $("geometry-view").width=canvas.width;$("geometry-view").height=canvas.height;
   $("mask-overlay").width=canvas.width;$("mask-overlay").height=canvas.height;
-  render(); if (mode === "zoom") scheduleDetail();
+  updateViewButtons();render(); if (mode === "zoom") scheduleDetail();
 }
 new ResizeObserver(resize).observe($("canvas"));
 
@@ -198,7 +201,7 @@ async function openFile(file) {
     photo = next;
     if (previousPhoto) fetch(`/api/photos/${previousPhoto.id}`,{method:"DELETE"}).catch(()=>{});
     if (gpu) {if (cpuEdited!==cpuOriginal) closeBitmap(cpuEdited);closeBitmap(cpuOriginal);cpuOriginal=cpuEdited=null;}
-    comparing = false; split = false; mode = "fit"; pan = [0,0];
+    comparing = false; split = false; mode = "fit";zoomScale=1; pan = [0,0];
     clearTimeout(maskTimer);clearTimeout(overlayTimer);overlayGeneration++;overlayAbort?.abort();
     maskEditor.masks=[];maskEditor.setOverlay(null);overlayKey="";overlayPendingKey="";appliedMaskKey="[]";maskGeneration++;maskAbort?.abort();maskBusy=false;
     geometryEditor.clear();
@@ -211,6 +214,7 @@ async function openFile(file) {
   finally { opening = false; busy(null); availability(); $("file").value=""; }
 }
 function scheduleEdits(event) {
+  if(!gpu&&detail)clearDetail();
   if (event?.target?.id.startsWith("curve_")) {customCurve=null;constrainCurve(event.target);}
   ensureStructure();
   revision++;cancelAnimationFrame(outputFrame);outputFrame=requestAnimationFrame(updateOutputs);
@@ -237,7 +241,7 @@ async function refreshCpu() {
 
 function scheduleHistogram() { clearTimeout(histogramTimer);if(!interacting)histogramTimer=setTimeout(updateHistogram,220); }
 // Keep full-resolution histogram readback off the slider/curve drag path.
-document.addEventListener("pointerdown",event=>{if(event.target.matches('input[type="range"],#tone-curve')){interacting=true;clearTimeout(histogramTimer);}},true);
+document.addEventListener("pointerdown",event=>{if(event.target.matches('input[type="range"],#tone-curve')&&event.target.id!=="zoom-scale"){interacting=true;clearTimeout(histogramTimer);}},true);
 for(const name of ["pointerup","pointercancel"])document.addEventListener(name,()=>{if(interacting){interacting=false;scheduleHistogram();}},true);
 window.addEventListener("blur",()=>{interacting=false;scheduleHistogram();});
 function updateHistogram() {
@@ -281,70 +285,88 @@ worker.onmessage = ({data}) => {
 worker.onerror = () => {histogramRunning=false;error("히스토그램 작업에 실패했습니다. 새로고침해 주세요.");};
 
 function updateViewButtons() {
-  $("fit").setAttribute("aria-pressed",mode === "fit"); $("zoom").setAttribute("aria-pressed",mode === "zoom");
-  $("split").setAttribute("aria-pressed",split); $("split-control").hidden=!split;
-  $("canvas").classList.toggle("zoomed",mode === "zoom");
+ $("fit").setAttribute("aria-pressed",mode==="fit");$("zoom").setAttribute("aria-pressed",mode!=="fit"&&Math.abs(zoomScale-1)<1e-6);
+ $("split").setAttribute("aria-pressed",split);$("split-control").hidden=!split;
+ $("canvas").classList.toggle("zoomed",mode!=="fit");
+ const percent=view().scale*100;$("zoom-scale").value=Math.max(1,Math.min(200,percent));$("zoom-value").textContent=`${percent<10?percent.toFixed(1):Math.round(percent)}%`;
+ $("preview").dataset.zoom=String(percent);
 }
-function setMode(next, point) {
-  if (!photo || opening || exporting || (next==="zoom"&&geometryEditor?.active)) return;
-  const v=view();
-  if (next === "zoom") {
-    const center=point || [canvas.width/2,canvas.height/2];
-    pan=[(center[0]-v.offset[0])/v.scale+v.origin[0]-canvas.width/2,(center[1]-v.offset[1])/v.scale+v.origin[1]-canvas.height/2];
-  }
-  mode=next;clearDetail();updateViewButtons();render();
-  if (mode === "zoom") scheduleDetail(); else status("화면 맞춤 · 전체 사진");
+function setZoom(scale,point){
+ if(!photo||opening||exporting||(geometryEditor?.active&&geometryEditor.editing))return;
+ scale=Math.max(.01,Math.min(2,scale));const old=view(),anchor=point||[canvas.width/2,canvas.height/2];
+ pan=anchoredPan(old,scale,anchor,outputSize(),[canvas.width,canvas.height]);zoomScale=scale;mode="zoom";
+ updateViewButtons();queueRender();scheduleDetail();
 }
-function scheduleDetail() {
-  clearTimeout(detailTimer); detailRevision++; detailAbort?.abort();
-  if (mode !== "zoom" || !photo || opening) return;
-  detailTimer=setTimeout(loadDetail,140);
+function setMode(next,point){
+ if(next==="zoom")return setZoom(1,point);
+ if(!photo||opening||exporting)return;mode="fit";pan=[0,0];clearDetail();updateViewButtons();render();status("화면 맞춤 · 전체 사진");
 }
-async function loadDetail() {
-  if (mode !== "zoom" || !photo || opening) return;
-  const v=view(), id=photo.id, version=detailRevision;
-  const x=Math.floor(v.origin[0]),y=Math.floor(v.origin[1]);
-  const width=Math.min(4096,canvas.width,photo.width-x),height=Math.min(4096,canvas.height,photo.height-y);
-  const query=`detail?x=${x}&y=${y}&width=${width}&height=${height}`;
-  detailAbort=new AbortController(); const signal=detailAbort.signal;
-  status("100% 디테일을 불러오는 중…");
-  let original,edited;
-  try {
-    if (gpu) {
-      const data=await linearData(await fetch(`/api/photos/${id}/${query}`,{signal}));
-      if (version !== detailRevision || photo.id !== id || mode !== "zoom") return;
-      const masked=settings().masks.length ? await linearData(await postImage(id,`masked-detail?x=${x}&y=${y}&width=${width}&height=${height}`,settings(),signal)) : null;
-      if (version !== detailRevision || photo.id!==id || mode!=="zoom") return;
-      gpu.loadDetail(data,masked);
-    } else {
-      const responses=await Promise.all([postImage(id,query,defaults,signal),postImage(id,query,settings(),signal)]);
-      original=await createImageBitmap(await responses[0].blob()); edited=await createImageBitmap(await responses[1].blob());
-      if (version !== detailRevision || photo.id !== id || mode !== "zoom") {closeBitmap(original);closeBitmap(edited);return;}
-      if (detail) {closeBitmap(detail.original);closeBitmap(detail.edited);}
-      detail={original,edited,x,y,width:original.width,height:original.height};
-    }
-    canvas.dataset.detail=`${x},${y},${width},${height}`;ensureStructure(); render();
-    status("100% · 원본 1픽셀 = 화면 1픽셀 · 드래그로 이동");
-  } catch (e) {
-    closeBitmap(original);closeBitmap(edited);
-    if (e.name !== "AbortError" && version === detailRevision) {error(e.message);status("원본 디테일을 불러오지 못했어요 · 축소 미리보기 표시 중");}
-  }
+function needsDetail(){return photo&&mode==="zoom"&&view().scale>Math.min(photo.preview_width/photo.width,photo.preview_height/photo.height)*.95;}
+function scheduleDetail(){
+ clearTimeout(detailTimer);detailRevision++;detailAbort?.abort();
+ if(!needsDetail()||opening||zoomInteracting||drag)return;
+ detailTimer=setTimeout(loadDetail,240);
+}
+async function loadDetail(){
+ if(!needsDetail()||opening||zoomInteracting||drag)return;
+ const v=view(),size=outputSize(),viewport=[canvas.width,canvas.height],id=photo.id,version=detailRevision;
+ const geometry=geometryState(),visible=visibleRegion(v,size,viewport),expanded=visibleRegion(v,size,viewport,64);
+ const inner=gpu?(geometry?projectedRegion(visible,geometry,[photo.width,photo.height],2):visible):visible;
+ const region=gpu?(geometry?projectedRegion(expanded,geometry,[photo.width,photo.height],4):expanded):expanded;
+ if(!region)return;
+ const key=gpu?`${id}:${maskEditor.key}`:`${id}:${revision}:${JSON.stringify(geometryEditor?.active?geometryEditor.value:geometryDefaults())}`;
+ if(detailCache?.key===key&&containsRegion(detailCache.region,inner)&&(!detailCache.sampled||v.scale<=detailCache.scale)){status("확대 · 캐시된 원본 영역 · 드래그로 이동");return;}
+ detailAbort=new AbortController();const signal=detailAbort.signal;
+ const query=`x=${region.x}&y=${region.y}&width=${region.width}&height=${region.height}`;
+ status("확대 영역을 정밀하게 불러오는 중…");let original,edited;
+ try{
+   if(gpu){
+     const values=settings(),data=await linearData(await postImage(id,`region?${query}`,values,signal));
+     if(version!==detailRevision||photo?.id!==id||mode!=="zoom")return;
+     const masked=values.masks.length?await linearData(await postImage(id,`region?${query}&masked=true`,values,signal)):null;
+     if(version!==detailRevision||photo?.id!==id||mode!=="zoom")return;
+     gpu.loadDetail(data,masked);structureDetailKey="";
+     detailCache={key,region:{x:data.x,y:data.y,width:data.span[0],height:data.span[1]},scale:v.scale,sampled:data.width!==data.span[0]||data.height!==data.span[1]};
+     canvas.dataset.detail=`${data.x},${data.y},${data.span[0]},${data.span[1]}`;
+   }else{
+     const geo=geometryEditor?.active?geometryEditor.value:geometryDefaults();
+     const responses=await Promise.all([postImage(id,`viewport?${query}`,{...defaults,geometry:geo},signal),postImage(id,`viewport?${query}`,{...settings(),geometry:geo},signal)]);
+     original=await createImageBitmap(await responses[0].blob());edited=await createImageBitmap(await responses[1].blob());
+     if(version!==detailRevision||photo?.id!==id||mode!=="zoom"){original.close();edited.close();return;}
+     detail?.original.close();detail?.edited.close();
+     const width=Number(responses[1].headers.get("X-Region-Width")),height=Number(responses[1].headers.get("X-Region-Height"));
+     detail={original,edited,x:region.x,y:region.y,width,height};detailCache={key,scale:v.scale,sampled:edited.width!==width||edited.height!==height,region:{x:region.x,y:region.y,width,height}};
+     canvas.dataset.detail=`${region.x},${region.y},${width},${height}`;
+   }
+   ensureStructure();render();status("확대 · 원본 영역 갱신 완료 · 드래그로 이동");
+ }catch(e){original?.close();edited?.close();if(e.name!=="AbortError"&&version===detailRevision){error(e.message);status("축소 미리보기 표시 중 · 확대 영역을 다시 이동해 주세요");}}
 }
 let drag=null;
-$("canvas").addEventListener("pointerdown",(event) => {
-  if (mode !== "zoom" || !photo || opening || exporting || event.target.closest("#busy") || geometryEditor?.active) return;
-  event.preventDefault(); $("canvas").setPointerCapture(event.pointerId);
-  drag={x:event.clientX,y:event.clientY,pan:[...view().origin]};
-});
-$("canvas").addEventListener("pointermove",(event) => {
-  if (!drag) return;
-  pan=[drag.pan[0]-(event.clientX-drag.x)*devicePixelRatio,drag.pan[1]-(event.clientY-drag.y)*devicePixelRatio]; queueRender();
-});
-for (const name of ["pointerup","pointercancel","lostpointercapture"]) $("canvas").addEventListener(name,() => {if (drag) {drag=null;render();scheduleDetail();}});
-$("canvas").addEventListener("dblclick",(event) => {
-  const rect=canvas.getBoundingClientRect(); setMode(mode === "fit" ? "zoom" : "fit",[(event.clientX-rect.left)*devicePixelRatio,(event.clientY-rect.top)*devicePixelRatio]);
-});
-$("fit").onclick=() => setMode("fit"); $("zoom").onclick=() => {if (mode !== "zoom") setMode("zoom");};
+$("canvas").addEventListener("pointerdown",event=>{
+ if(mode!=="zoom"||!photo||opening||exporting||(geometryEditor?.active&&geometryEditor.editing)||event.target.closest("#busy"))return;
+ if(event.button!==1&&(event.button!==0||(!panSpace&&maskEditor?.active)))return;
+ event.preventDefault();event.stopImmediatePropagation();$("canvas").setPointerCapture(event.pointerId);
+ drag={id:event.pointerId,x:event.clientX,y:event.clientY,pan:[...view().origin],scale:view().scale};clearTimeout(detailTimer);detailRevision++;detailAbort?.abort();
+},true);
+$("canvas").addEventListener("pointermove",event=>{
+ if(!drag||event.pointerId!==drag.id)return;event.preventDefault();event.stopImmediatePropagation();
+ const box=canvas.getBoundingClientRect();pan=[drag.pan[0]-(event.clientX-drag.x)*canvas.width/box.width/drag.scale,drag.pan[1]-(event.clientY-drag.y)*canvas.height/box.height/drag.scale];queueRender();
+},true);
+for(const name of ["pointerup","pointercancel","lostpointercapture"])$("canvas").addEventListener(name,event=>{if(drag&&event.pointerId===drag.id){event.stopImmediatePropagation();drag=null;render();scheduleDetail();}},true);
+$("canvas").addEventListener("wheel",event=>{
+ if(!photo||opening||exporting||(geometryEditor?.active&&geometryEditor.editing))return;
+ event.preventDefault();const box=canvas.getBoundingClientRect(),delta=event.deltaY*(event.deltaMode===1?16:event.deltaMode===2?box.height:1);
+ setZoom(view().scale*Math.exp(-Math.max(-240,Math.min(240,delta))*.002),[(event.clientX-box.left)*canvas.width/box.width,(event.clientY-box.top)*canvas.height/box.height]);
+},{passive:false});
+$("canvas").addEventListener("dblclick",event=>{if(maskEditor?.active||(geometryEditor?.active&&geometryEditor.editing))return;const box=canvas.getBoundingClientRect();setMode(mode==="fit"?"zoom":"fit",[(event.clientX-box.left)*canvas.width/box.width,(event.clientY-box.top)*canvas.height/box.height]);});
+$("fit").onclick=()=>setMode("fit");$("zoom").onclick=()=>setZoom(1);
+$("zoom-scale").oninput=()=>setZoom(Number($("zoom-scale").value)/100);
+$("zoom-scale").onchange=()=>scheduleDetail();
+$("zoom-scale").addEventListener("pointerdown",()=>{zoomInteracting=true;clearTimeout(detailTimer);});
+for(const name of ["pointerup","pointercancel"])document.addEventListener(name,()=>{if(zoomInteracting){zoomInteracting=false;scheduleDetail();}},true);
+document.addEventListener("keydown",event=>{if(event.code==="Space"&&event.target.id!=="compare"&&!['TEXTAREA','SELECT'].includes(event.target.tagName)&&!(event.target.tagName==="INPUT"&&event.target.type!=="range")){panSpace=true;event.preventDefault();}});
+document.addEventListener("keyup",event=>{if(event.code==="Space")panSpace=false;});
+window.addEventListener("blur",()=>{panSpace=false;zoomInteracting=false;drag=null;});
 $("split").onclick=() => {split=!split;comparing=false;updateViewButtons();render();};
 $("split-position").oninput=queueRender;
 inputs.forEach((input) => input.addEventListener("input",scheduleEdits));
@@ -498,7 +520,7 @@ $("preset-import-file").onchange=async()=>{
 function drawMaskOverlay(v,project=null) {
  const layer=$("mask-overlay"),ctx=layer.getContext("2d");
  ctx.clearRect(0,0,layer.width,layer.height);
- if (photo && !comparing && maskEditor) {ctx.save();if(project){const r=geometryEditor.displayRect(canvas.width,canvas.height);ctx.beginPath();ctx.rect(...r);ctx.clip();}maskEditor.draw(ctx,v,photo,layer.width,layer.height,{project,skipBitmap:Boolean(gpu)});ctx.restore();}
+ if (photo && !comparing && maskEditor) {ctx.save();if(project){const size=outputSize(),r=[v.offset[0]-v.origin[0]*v.scale,v.offset[1]-v.origin[1]*v.scale,size[0]*v.scale,size[1]*v.scale];ctx.beginPath();ctx.rect(...r);ctx.clip();}maskEditor.draw(ctx,v,photo,layer.width,layer.height,{project,skipBitmap:Boolean(gpu)});ctx.restore();}
 }
 function scheduleMaskBake() {
  clearTimeout(maskTimer);const generation=++maskGeneration;
@@ -551,8 +573,8 @@ function imagePoint(event) {
  if (!photo) return null;
  const rect=canvas.getBoundingClientRect();
  if(geometryEditor?.active){
-   const state=geometryEditor.gpuState(canvas.width,canvas.height),px=(event.clientX-rect.left)*canvas.width/rect.width,py=(event.clientY-rect.top)*canvas.height/rect.height;
-   const q=[(px-state.view.offset[0])/state.view.scale,(py-state.view.offset[1])/state.view.scale];
+   const state={geometry:geometryState(),view:view()},px=(event.clientX-rect.left)*canvas.width/rect.width,py=(event.clientY-rect.top)*canvas.height/rect.height;
+   const q=[(px-state.view.offset[0])/state.view.scale+state.view.origin[0],(py-state.view.offset[1])/state.view.scale+state.view.origin[1]];
    if(q[0]<0||q[1]<0||q[0]>=state.geometry.size[0]||q[1]>=state.geometry.size[1])return null;
    q[0]+=state.geometry.cropOrigin[0];q[1]+=state.geometry.cropOrigin[1];const raw=transform(state.geometry.inverse,q);
    if(raw[0]<0||raw[1]<0||raw[0]>photo.width||raw[1]>photo.height)return null;
@@ -631,7 +653,7 @@ window.addEventListener("pagehide",event=>{
  if (detail) {closeBitmap(detail.original);closeBitmap(detail.edited);}maskEditor?.setOverlay(null);
 });
 
-geometryEditor=new GeometryEditor({getPhoto:()=>photo,onChange:commit=>{mode="fit";clearDetail();availability();scheduleEdits();if(commit)record();},onView:()=>{queueRender();scheduleHistogram();},onError:error,onMessage:status});
+geometryEditor=new GeometryEditor({getPhoto:()=>photo,onChange:commit=>{mode="fit";pan=[0,0];clearDetail();updateViewButtons();availability();scheduleEdits();if(commit)record();},onView:()=>{queueRender();scheduleHistogram();if(!gpu&&mode==="zoom")scheduleDetail();},onError:error,onMessage:status});
 let geometryPointer=null;
 $("canvas").addEventListener("pointerdown",event=>{if(opening||exporting||!photo||event.button!==0)return;if(geometryEditor.down(event)){event.preventDefault();event.stopImmediatePropagation();geometryPointer=event.pointerId;$("canvas").setPointerCapture(event.pointerId);}},true);
 $("canvas").addEventListener("pointermove",event=>{if(geometryPointer!==event.pointerId){geometryEditor.hover(event);return;}event.preventDefault();event.stopImmediatePropagation();geometryEditor.move(event);},true);

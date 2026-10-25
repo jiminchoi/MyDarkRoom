@@ -38,3 +38,30 @@ export function gpuGeometry(size,g,editing=false){
  const x=roundPixel(crop[0]*w),y=roundPixel(crop[1]*h),right=Math.min(w,Math.max(x+1,roundPixel((crop[0]+crop[2])*w))),bottom=Math.min(h,Math.max(y+1,roundPixel((crop[1]+crop[3])*h)));
  return {inverse:inverse(forwardMatrix(size,g)),cropOrigin:[x,y],size:[right-x,bottom-y]};
 }
+
+// View positions are cropped output pixels; scale is physical display pixels / output pixel.
+export function viewAt(size,viewport,scale,pan=[0,0]){
+ const [w,h]=size,[vw,vh]=viewport;
+ const origin=pan.map((v,i)=>Math.max(0,Math.min(v,Math.max(0,size[i]-viewport[i]/scale))));
+ return {scale,origin,offset:[Math.max(0,(vw-w*scale)/2),Math.max(0,(vh-h*scale)/2)]};
+}
+export function anchoredPan(oldView,newScale,point,size,viewport){
+ const at=point.map((p,i)=>(p-oldView.offset[i])/oldView.scale+oldView.origin[i]);
+ const next=viewAt(size,viewport,newScale);
+ return viewAt(size,viewport,newScale,at.map((v,i)=>v-(point[i]-next.offset[i])/newScale)).origin;
+}
+export function visibleRegion(view,size,viewport,padding=0){
+ const x=Math.max(0,Math.floor(view.origin[0]-padding)),y=Math.max(0,Math.floor(view.origin[1]-padding));
+ const right=Math.min(size[0],Math.ceil(view.origin[0]+viewport[0]/view.scale+padding));
+ const bottom=Math.min(size[1],Math.ceil(view.origin[1]+viewport[1]/view.scale+padding));
+ return {x,y,width:Math.max(1,right-x),height:Math.max(1,bottom-y)};
+}
+export function projectedRegion(region,g,sourceSize,padding=4){
+ const {x,y,width,height}=region,[cx,cy]=g.cropOrigin;
+ const points=[[x,y],[x+width,y],[x+width,y+height],[x,y+height]].map(([u,v])=>transform(g.inverse,[u+cx,v+cy]));
+ if(points.some(p=>p[2]<=1e-8||p.some(v=>!Number.isFinite(v))))return {x:0,y:0,width:sourceSize[0],height:sourceSize[1]};
+ const left=Math.max(0,Math.floor(Math.min(...points.map(p=>p[0])))-padding),top=Math.max(0,Math.floor(Math.min(...points.map(p=>p[1])))-padding);
+ const right=Math.min(sourceSize[0],Math.ceil(Math.max(...points.map(p=>p[0])))+padding),bottom=Math.min(sourceSize[1],Math.ceil(Math.max(...points.map(p=>p[1])))+padding);
+ return right>left&&bottom>top?{x:left,y:top,width:right-left,height:bottom-top}:null;
+}
+export function containsRegion(outer,inner){return outer&&inner&&inner.x>=outer.x&&inner.y>=outer.y&&inner.x+inner.width<=outer.x+outer.width&&inner.y+inner.height<=outer.y+outer.height;}

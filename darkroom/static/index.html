@@ -18,7 +18,7 @@
   <main>
     <section class="workspace" id="drop-zone" aria-label="사진 미리보기">
       <div class="photo-info"><span id="filename">아직 불러온 사진이 없어요</span><span id="dimensions">NEF 전용</span></div>
-      <div class="canvas" id="canvas">
+      <div class="canvas" id="canvas" tabindex="0">
         <div id="empty">
           <div class="empty-icon">◩</div>
           <p class="eyebrow">LESS FUSS. MORE PHOTOS.</p>
@@ -33,7 +33,7 @@
         <div id="busy" role="status" hidden><span class="spinner"></span><span id="busy-text">사진을 현상하고 있어요</span></div>
       </div>
       <div class="view-tools">
-        <div class="zoom-tools" role="group" aria-label="확대"><button id="fit" aria-pressed="true" disabled>화면 맞춤</button><button id="zoom" aria-pressed="false" disabled>100%</button></div>
+        <div class="zoom-tools" role="group" aria-label="확대"><button id="fit" aria-pressed="true" disabled>화면 맞춤</button><button id="zoom" aria-pressed="false" disabled>100%</button><label class="zoom-slider" for="zoom-scale">배율 <input id="zoom-scale" type="range" min="1" max="200" step="1" value="100" disabled><output id="zoom-value" for="zoom-scale">—</output></label></div>
         <span id="renderer-mode">GPU 확인 중</span>
         <button id="split" aria-pressed="false" disabled>전후 나눠 보기</button>
       </div>

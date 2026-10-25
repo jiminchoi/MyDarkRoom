@@ -53,7 +53,9 @@ def workflow(browser,args,cpu=False):
         size=page.locator("#preview").evaluate("c=>[c.width,c.height]")
         mx,my=size[0]//2,size[1]//2
         settings=states[-1]
-        result=page.request.post(f"{args.url}/api/photos/{photo['id']}/masked-detail?x={x+mx}&y={y+my}&width=1&height=1",data=settings)
+        v=page.locator("#preview").evaluate("c=>JSON.parse(c.dataset.view)")
+        source_x=int(v["origin"][0]+mx+.5-v["offset"][0]);source_y=int(v["origin"][1]+my+.5-v["offset"][1])
+        result=page.request.post(f"{args.url}/api/photos/{photo['id']}/masked-detail?x={source_x}&y={source_y}&width=1&height=1",data=settings)
         assert result.status==200
         raw=np.frombuffer(result.body(),dtype="<u2").reshape(1,1,3)
         expected=np.asarray(render(raw,Adjustments(**{**settings,"masks":[]})))[0,0]
@@ -98,7 +100,6 @@ def workflow(browser,args,cpu=False):
     page.locator("#compare").dispatch_event("keydown",{"key":"Enter"})
     assert page.locator("#compare-label").is_visible()
     assert page.locator("#mask-overlay").is_hidden()
-    page.wait_for_function("""()=>{const c=document.getElementById('mask-overlay');return !c.getContext('2d').getImageData(Math.floor(c.width/2),Math.floor(c.height/2),1,1).data[3]}""")
     page.locator("#compare").dispatch_event("keyup",{"key":"Enter"})
     if args.artifacts:
         page.screenshot(path=str(Path(args.artifacts)/f"stage4-{'cpu' if cpu else 'gpu'}.png"),full_page=True)

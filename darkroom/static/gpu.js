@@ -11,7 +11,7 @@ uniform usampler2D source;
 uniform usampler2D detail;
 uniform usampler2D maskedSource, maskedDetail;
 uniform bool hasMaskedSource, hasMaskedDetail;
-uniform vec2 outputSize, fullSize, offset, origin, detailOrigin;
+uniform vec2 outputSize, fullSize, offset, origin, detailOrigin, detailSpan;
 uniform float scale, splitPosition;
 uniform bool hasDetail, before, split, histogram;
 uniform bool geometryEnabled;
@@ -66,6 +66,7 @@ void main() {
   if (any(lessThan(p,vec2(0))) || any(greaterThanEqual(p,extent))) {
     result=vec4(vec3(16.,18.,18.)/255.,1.); return;
   }
+  if(!histogram&&scale>=1.)p=floor(p)+.5;
   if(geometryEnabled){
     vec3 sourcePoint=inverseGeometry*vec3(p+cropOrigin,1.);
     p=sourcePoint.xy/sourcePoint.z;
@@ -74,10 +75,10 @@ void main() {
   bool original = !histogram && (before || (split && screen.x < outputSize.x*splitPosition));
   vec3 x = hasMaskedSource && !original ? sample16(maskedSource,p/fullSize) : sample16(source, p/fullSize);
   vec2 dp = p-detailOrigin;
-  bool useDetail=hasDetail && !histogram && !geometryEnabled && all(greaterThanEqual(dp,vec2(0))) && all(lessThan(dp,vec2(textureSize(detail,0))));
+  bool useDetail=hasDetail && !histogram && scale>min(float(textureSize(source,0).x)/fullSize.x,float(textureSize(source,0).y)/fullSize.y)*.95 && all(greaterThanEqual(dp,vec2(0))) && all(lessThan(dp,detailSpan));
   if (useDetail) {
-    x = sample16(detail, dp/vec2(textureSize(detail,0)));
-    if (hasMaskedDetail && !original) x=sample16(maskedDetail, dp/vec2(textureSize(detail,0)));
+    x = sample16(detail, dp/detailSpan);
+    if (hasMaskedDetail && !original) x=sample16(maskedDetail, dp/detailSpan);
   }
   vec4 l = original ? vec4(0) : light;
   vec3 c = original ? vec3(0) : color;
@@ -89,7 +90,7 @@ void main() {
   x *= exp2(l.w/100.*shadow+l.z/100.*highlight);
   x = clamp(x,0.,1.);
   x = mix(1.055*pow(x,vec3(1./2.4))-.055,12.92*x,lessThanEqual(x,vec3(.0031308)));
-  if(!original&&hasStructure&&any(notEqual(structureAmount,vec3(0)))){vec4 f=useDetail&&hasStructureDetail?sampleFields(structureDetail,dp/vec2(textureSize(detail,0))):sampleFields(structureSource,p/fullSize);x=spatial(x,f);}
+  if(!original&&hasStructure&&any(notEqual(structureAmount,vec3(0)))){vec4 f=useDetail&&hasStructureDetail?sampleFields(structureDetail,dp/detailSpan):sampleFields(structureSource,p/fullSize);x=spatial(x,f);}
   x = (x-.5)*exp2(l.y/100.)+.5;
   if (!original && curveEnabled) x=vec3(curveValue(x.r),curveValue(x.g),curveValue(x.b));
   lum = dot(x,vec3(.2126,.7152,.0722));
@@ -135,7 +136,7 @@ export class GpuRenderer {
     const position = gl.getAttribLocation(this.program, "position");
     gl.enableVertexAttribArray(position); gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
     this.locations = {};
-    for (const name of ["source","detail","outputSize","fullSize","offset","origin","detailOrigin","scale","splitPosition","hasDetail","before","split","histogram","light","color","monochrome","mixer","tone","toneAmount","grain","grainSize","maskedSource","maskedDetail","hasMaskedSource","hasMaskedDetail","geometryEnabled","inverseGeometry","geometrySize","cropOrigin","structureSource","structureDetail","maskOverlay","hasStructure","hasStructureDetail","showOverlay","structureAmount"]) this.locations[name] = gl.getUniformLocation(this.program, name);
+    for (const name of ["source","detail","outputSize","fullSize","offset","origin","detailOrigin","detailSpan","scale","splitPosition","hasDetail","before","split","histogram","light","color","monochrome","mixer","tone","toneAmount","grain","grainSize","maskedSource","maskedDetail","hasMaskedSource","hasMaskedDetail","geometryEnabled","inverseGeometry","geometrySize","cropOrigin","structureSource","structureDetail","maskOverlay","hasStructure","hasStructureDetail","showOverlay","structureAmount"]) this.locations[name] = gl.getUniformLocation(this.program, name);
     gl.uniform1i(this.locations.source, 0); gl.uniform1i(this.locations.detail, 1);
     gl.uniform1i(this.locations.maskedSource,2);gl.uniform1i(this.locations.maskedDetail,3);gl.uniform1i(this.locations.structureSource,4);gl.uniform1i(this.locations.structureDetail,5);gl.uniform1i(this.locations.maskOverlay,6);
     this.locations.masterCurve=gl.getUniformLocation(this.program,"masterCurve[0]");
@@ -182,7 +183,7 @@ export class GpuRenderer {
   clearDetail() {this.gl.deleteTexture(this.structureDetailTexture);this.structureDetailTexture=null; this.gl.deleteTexture(this.detailTexture); this.detailTexture = null;this.gl.deleteTexture(this.maskedDetailTexture);this.maskedDetailTexture=null; }
   loadDetail(data,masked=null) {
     const texture = this.upload(data);
-    this.clearDetail(); this.detailTexture = texture; this.detailOrigin = [data.x, data.y];
+    this.clearDetail(); this.detailTexture = texture; this.detailOrigin = [data.x, data.y];this.detailSpan=data.span||[data.width,data.height];
     if (masked) this.maskedDetailTexture=this.upload(masked);
   }
   draw(settings, view, { before = false, split = false, splitPosition = .5, histogram = false, geometry = null, overlay=false } = {}) {
@@ -209,7 +210,7 @@ export class GpuRenderer {
     }
     gl.uniform2f(u.outputSize,width,height); gl.uniform2f(u.fullSize,this.photo.width,this.photo.height);
     gl.uniform2fv(u.offset,view.offset); gl.uniform2fv(u.origin,view.origin);
-    gl.uniform2fv(u.detailOrigin,this.detailOrigin || [0,0]); gl.uniform1f(u.scale,view.scale);
+    gl.uniform2fv(u.detailOrigin,this.detailOrigin || [0,0]);gl.uniform2fv(u.detailSpan,this.detailSpan||[0,0]); gl.uniform1f(u.scale,view.scale);
     gl.uniform1i(u.hasDetail,Boolean(this.detailTexture)); gl.uniform1i(u.before,before); gl.uniform1i(u.split,split);
     gl.uniform1i(u.histogram,histogram); gl.uniform1f(u.splitPosition,splitPosition);
     gl.uniform4f(u.light,settings.exposure,settings.contrast,settings.highlights,settings.shadows);

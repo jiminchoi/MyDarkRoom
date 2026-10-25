@@ -183,7 +183,7 @@ def index():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "rawpy": rawpy.__version__, "libraw": ".".join(map(str, rawpy.libraw_version)),"dng_converter":bool(converter_path()),"app_version":"0.8.0"}
+    return {"status": "ok", "rawpy": rawpy.__version__, "libraw": ".".join(map(str, rawpy.libraw_version)),"dng_converter":bool(converter_path()),"app_version":"0.9.0"}
 
 
 @app.post("/api/photos")
@@ -333,3 +333,29 @@ def structure_pixels(photo_id:str,request:Request,x:int|None=Query(default=None,
             return Response(data.tobytes(),media_type="application/octet-stream",headers={"X-Image-Width":str(data.shape[1]),"X-Image-Height":str(data.shape[0]),"X-Image-X":str(origin[0]),"X-Image-Y":str(origin[1])})
         finally:
             if mapping is not None:mapping._mmap.close()
+
+@app.post("/api/photos/{photo_id}/region")
+def zoom_region(photo_id:str,settings:Adjustments,request:Request,x:int=Query(ge=0),y:int=Query(ge=0),width:int=Query(ge=1,le=100000),height:int=Query(ge=1,le=100000),masked:bool=False):
+    from .viewport import source_region
+    studio=request.app.state.studio
+    with studio.lock:
+        photo=studio.get(photo_id);mapping=studio.full(photo)
+        try:
+            rgb,span=source_region(mapping,x,y,width,height)
+            if masked:rgb=bake_masks(rgb,settings.masks,origin=(x,y),pixel_scale=(span[0]/rgb.shape[1],span[1]/rgb.shape[0]),full_size=(photo.width,photo.height))
+            return Response(rgb.astype('<u2',copy=False).tobytes(),media_type='application/octet-stream',headers={"X-Image-Width":str(rgb.shape[1]),"X-Image-Height":str(rgb.shape[0]),"X-Image-X":str(x),"X-Image-Y":str(y),"X-Region-Width":str(span[0]),"X-Region-Height":str(span[1])})
+        except ValueError as exc:raise HTTPException(422,str(exc)) from exc
+        finally:mapping._mmap.close()
+
+
+@app.post("/api/photos/{photo_id}/viewport")
+def zoom_viewport(photo_id:str,settings:Adjustments,request:Request,x:int=Query(ge=0),y:int=Query(ge=0),width:int=Query(ge=1,le=100000),height:int=Query(ge=1,le=100000)):
+    from .viewport import viewport_image
+    studio=request.app.state.studio
+    with studio.lock:
+        photo=studio.get(photo_id);mapping=studio.full(photo)
+        try:
+            data,span,size=viewport_image(mapping,settings,x,y,width,height)
+            return Response(data,media_type='image/jpeg',headers={"X-Image-Width":str(size[0]),"X-Image-Height":str(size[1]),"X-Image-X":str(x),"X-Image-Y":str(y),"X-Region-Width":str(span[0]),"X-Region-Height":str(span[1])})
+        except ValueError as exc:raise HTTPException(422,str(exc)) from exc
+        finally:mapping._mmap.close()

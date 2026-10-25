@@ -77,10 +77,12 @@ export class GeometryEditor {
     const aspect=photo.width*crop[2]/(photo.height*crop[3]);let width=w,height=w/aspect;if(height>h){height=h;width=h*aspect;}
     return [(w-width)/2,(h-height)/2,width,height];
   }
-  draw(ctx,w,h,{before,split,fraction,guidesOnly=false}) {
+  draw(ctx,w,h,{before,split,fraction,guidesOnly=false,view=null,detail=null}) {
     ctx.clearRect(0,0,w,h);if(!guidesOnly){ctx.fillStyle="#101212";ctx.fillRect(0,0,w,h);}const rect=this.displayRect(w,h);
-    if(!guidesOnly&&this.bitmap)ctx.drawImage(before?this.before:this.bitmap,...rect);
-    if(!guidesOnly&&this.bitmap&&split&&!before){ctx.save();ctx.beginPath();ctx.rect(0,0,w*fraction,h);ctx.clip();ctx.drawImage(this.before,...rect);ctx.restore();}
+    const state=this.gpuState(w,h),v=view||state.view,frame=[v.offset[0]-v.origin[0]*v.scale,v.offset[1]-v.origin[1]*v.scale,state.geometry.size[0]*v.scale,state.geometry.size[1]*v.scale];
+    const image=original=>{if(this.bitmap)ctx.drawImage(original?this.before:this.bitmap,...frame);if(detail){ctx.imageSmoothingEnabled=v.scale<1;ctx.drawImage(original?detail.original:detail.edited,v.offset[0]+(detail.x-v.origin[0])*v.scale,v.offset[1]+(detail.y-v.origin[1])*v.scale,detail.width*v.scale,detail.height*v.scale);}};
+    if(!guidesOnly)image(before);
+    if(!guidesOnly&&this.bitmap&&split&&!before){ctx.save();ctx.beginPath();ctx.rect(0,0,w*fraction,h);ctx.clip();image(true);ctx.restore();}
     if(this.editing){
       const [x,y,cw,ch]=this.drag?.rect||this.data.crop;const [left,top,width,height]=rect;
       ctx.strokeStyle="#e8ad74";ctx.lineWidth=2;ctx.strokeRect(left+x*width,top+y*height,cw*width,ch*height);

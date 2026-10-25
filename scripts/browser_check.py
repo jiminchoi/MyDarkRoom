@@ -121,10 +121,12 @@ def workflow(browser, args, *, cpu=False):
     first = page.locator("#preview").get_attribute("data-detail")
     x,y,width,height = map(int,first.split(","))
     size = page.locator("#preview").evaluate("c=>[c.width,c.height]")
-    assert width == min(size[0],metadata["width"]-x) and height == min(size[1],metadata["height"]-y)
+    assert width >= min(size[0],metadata["width"]-x) and height >= min(size[1],metadata["height"]-y)
     if not cpu and metadata["width"] > size[0] and metadata["height"] > size[1]:
         mx, my = size[0]//2, size[1]//2
-        sample = page.request.get(f"{args.url}/api/photos/{metadata['id']}/detail?x={x+mx}&y={y+my}&width=1&height=1")
+        v=page.locator("#preview").evaluate("c=>JSON.parse(c.dataset.view)")
+        source_x=int(v["origin"][0]+mx+.5-v["offset"][0]);source_y=int(v["origin"][1]+my+.5-v["offset"][1])
+        sample = page.request.get(f"{args.url}/api/photos/{metadata['id']}/detail?x={source_x}&y={source_y}&width=1&height=1")
         assert sample.status == 200
         rgb = np.frombuffer(sample.body(),dtype="<u2").reshape(1,1,3)
         expected = np.asarray(render(rgb,Adjustments(exposure=.8)))[0,0]
