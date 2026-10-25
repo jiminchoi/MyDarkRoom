@@ -4,6 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import threading
 import time
+import os
 from uuid import uuid4
 from io import BytesIO
 from PIL import Image
@@ -20,6 +21,7 @@ from .geometry import estimate_geometry
 from .structure import packed,packed_sharpness
 from .masking import bake_masks, mask_weight,brush_grid,packed_weights
 from .raw_support import RawCompatibilityError,converter_path
+from .version import VERSION
 
 STATIC = Path(__file__).parent / "static"
 MAX_UPLOAD = 256 * 1024 * 1024
@@ -152,7 +154,7 @@ class Studio:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    with TemporaryDirectory(prefix="mydarkroom-") as directory:
+    with TemporaryDirectory(prefix="mydarkroom-",dir=os.environ.get("MYDARKROOM_CACHE_DIR")) as directory:
         app.state.studio = Studio(Path(directory))
         try:
             yield
@@ -183,7 +185,7 @@ def index():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "rawpy": rawpy.__version__, "libraw": ".".join(map(str, rawpy.libraw_version)),"dng_converter":bool(converter_path()),"app_version":"0.10.0"}
+    return {"status": "ok", "rawpy": rawpy.__version__, "libraw": ".".join(map(str, rawpy.libraw_version)),"dng_converter":bool(converter_path()),"app_version":VERSION}
 
 
 @app.post("/api/photos")

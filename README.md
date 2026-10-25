@@ -1,5 +1,18 @@
 # MyDarkRoom
 
+## Windows EXE (0.11.0)
+
+[GitHub Releases](https://github.com/jiminchoi/MyDarkRoom/releases)의 **Windows-x64.zip** 전체를 새 폴더에 풀고 `MyDarkRoom.exe`를 실행하세요. Python 설치/초기 pip 설치가 필요 없습니다. `_internal` 폴더도 EXE 옆에 함께 보관하세요. 기존 소스 실행 창을 먼저 종료하면 기존 브라우저 포트와 프리셋을 이어 쓰기 쉽습니다.
+
+- 기동 때마다 대용량 실행 파일을 임시 폴더에 풀지 않는 **폴더형 EXE**입니다. 화면은 기존 Edge/Chrome, RAW·GPU·부분 확대·JPEG 엔진은 동일합니다. 별도 웹뷰/브라우저 엔진이나 추가 편집 서버 프로세스를 띄우지 않습니다.
+- 작은 실행 창의 **편집 화면 열기 / 종료 / 로그 폴더**를 사용합니다. 브라우저 탭만 닫으면 앱은 계속 실행되며 다시 열 수 있습니다. 중복 EXE 실행은 기존 인스턴스로 연결합니다. 종료 시 진행 중인 현상/저장을 기다리고 임시 RAW/DNG/mmap 파일을 정리합니다.
+- 데이터와 로그는 `%LOCALAPPDATA%\MyDarkRoom`에 저장합니다. 실행 폴더에 쓰지 않으며 한글/공백 경로를 지원합니다. 중단된 이전 임시 캐시도 다음 실행 시 정리합니다. 기본 포트 8765가 사용 중이면 비어 있는 포트를 선택하고 다음 실행 때 그 포트를 우선 사용합니다. 포트나 브라우저 프로필이 달라지면 브라우저 저장 프리셋/폴더 권한도 달라질 수 있습니다.
+- **Z5 II 고효율/고효율★용 Adobe DNG Converter는 별도 설치**하며 기존 기본 경로 설치를 탐지합니다. Adobe 프로그램은 재배포하지 않습니다. EXE는 Windows 10/11 **x64**용이고 개인 배포판에 코드 서명 인증서는 없습니다.
+
+Windows 빌드는 `.github/workflows/windows-release.yml`에서 수행합니다. 버전 태그를 푸시하면 엔진 테스트 → PyInstaller 폴더 빌드 → **Python 없는 PATH/한글 경로/실제 NEF/마스크·커브·부분 확대/JPEG DPI·ICC/중복 실행/네이티브 창/종료·캐시 정리/포트 충돌 검사**를 통과한 파일만 ZIP과 SHA256으로 Releases에 게시합니다. `BUILD-VERIFICATION.json`에는 해당 빌드의 실제 검증 결과가 포함됩니다.
+
+직접 빌드하려면 Windows x64 Python 3.12에서 `powershell -ExecutionPolicy Bypass -File packaging/build_windows.ps1`을 실행하세요. 결과는 `dist/MyDarkRoom/MyDarkRoom.exe`입니다. 검증 명령은 `python packaging/smoke_test.py --bundle dist/MyDarkRoom --nef C:\Photos\sample.NEF --gui --report release/windows-smoke.json`이며 검증용 NEF는 고정 해시의 공개 테스트 샘플을 사용합니다. 일반 사용자 사진 경로를 해당 스크립트에 넣지 마세요.
+
 ## 0.10.0: 마스크별 선예도·텍스처·명료도·디헤이즈
 
 - **마스크 → 이 마스크의 보정**에 네 슬라이더를 추가했습니다. 기본값 **0**, 범위 **-100~100**, 더블 클릭 초기화·키보드 조절·실행 취소/다시 실행을 지원합니다. 브러시·선형/원형 그라디언트·색상·휘도 마스크 모두 사용할 수 있습니다. 기존 전역 프리셋 적용 시 사진별 마스크와 새 보정값을 유지하며, 전역 프리셋 파일에는 사진별 마스크를 저장하지 않는 기존 동작을 유지합니다.

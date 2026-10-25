@@ -1,0 +1,88 @@
+name: Windows EXE build and verification
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+          cache: pip
+          cache-dependency-path: |
+            requirements.lock
+            requirements-build.txt
+      - name: Install locked build dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-build.txt
+      - name: Download checksum-verified real Nikon sample
+        run: python packaging/smoke_test.py --nef "$env:RUNNER_TEMP/sample.NEF" --download-only
+      - name: Test editing engine on Windows
+        env:
+          MYDARKROOM_TEST_NEF: ${{ runner.temp }}/sample.NEF
+          OMP_NUM_THREADS: '4'
+        run: python -m pytest -q
+      - name: Build portable EXE folder
+        run: ./packaging/build_windows.ps1 -SkipInstall
+      - name: Test frozen EXE and native launcher with no Python on PATH
+        run: python packaging/smoke_test.py --bundle dist/MyDarkRoom --nef "$env:RUNNER_TEMP/sample.NEF" --gui --report release/windows-smoke.json
+      - name: Package verified files and checksum
+        shell: pwsh
+        run: |
+          $version = python -c "from darkroom.version import VERSION;print(VERSION)"
+          if ('${{ github.ref_type }}' -eq 'tag' -and '${{ github.ref_name }}' -ne "v$version") { throw 'Tag/version mismatch' }
+          $zip = "MyDarkRoom-$version-Windows-x64.zip"
+          Copy-Item release/windows-smoke.json dist/MyDarkRoom/BUILD-VERIFICATION.json
+          Compress-Archive -Path dist/MyDarkRoom -DestinationPath "release/$zip" -CompressionLevel Optimal
+          $hash = (Get-FileHash "release/$zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $zip" | Set-Content -Encoding ascii release/SHA256SUMS.txt
+      - name: Save verified distribution
+        uses: actions/upload-artifact@v4
+        with:
+          name: MyDarkRoom-Windows-x64
+          path: |
+            release/*.zip
+            release/SHA256SUMS.txt
+            release/windows-smoke.json
+          compression-level: 0
+      - name: Save build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build-diagnostics
+          path: |
+            build/MyDarkRoom/warn-MyDarkRoom.txt
+            release/smoke-logs/
+          if-no-files-found: ignore
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: MyDarkRoom-Windows-x64
+          path: release
+      - name: Publish tested Windows download
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$RELEASE_TAG" release/*.zip release/SHA256SUMS.txt release/windows-smoke.json --verify-tag --title "MyDarkRoom $RELEASE_TAG — Windows EXE" --notes-file packaging/RELEASE-NOTES.md
