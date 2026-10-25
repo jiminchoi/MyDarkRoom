@@ -169,6 +169,7 @@ def workflow(browser, args, *, cpu=False):
         page.locator("#preset-export").click()
     backup_bytes=Path(backup.value.path()).read_bytes()
     page.reload()
+    page.evaluate("document.querySelectorAll('details.category').forEach(e=>e.open=true)")
     assert page.locator(f'#preset option[value="{saved_id}"]').inner_text()=="테스트 프리셋 <>&"
     page.locator("#file").set_input_files(args.nef)
     page.wait_for_function("!document.getElementById('controls').disabled",timeout=60000)

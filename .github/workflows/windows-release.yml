@@ -17,6 +17,9 @@ jobs:
   windows:
     runs-on: windows-2022
     timeout-minutes: 35
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -43,7 +46,14 @@ jobs:
       - name: Install embedded browser verification tools
         run: python -m pip install --disable-pip-version-check playwright==1.64.1 pywinauto==0.6.9
       - name: Test frozen EXE and native launcher with no Python on PATH
-        run: python packaging/smoke_test.py --bundle dist/MyDarkRoom --nef "$env:RUNNER_TEMP/sample.NEF" --gui --report release/windows-smoke.json
+        run: |
+          python packaging/smoke_test.py --bundle dist/MyDarkRoom --nef "$env:RUNNER_TEMP/sample.NEF" --gui --report release/windows-smoke.json 2>&1 | Tee-Object -FilePath release/full-smoke.log
+          if ($LASTEXITCODE) {
+            $tail = (Get-Content release/full-smoke.log -Tail 80) -join "`n"
+            $encoded = $tail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Windows embedded smoke error::$encoded"
+            exit 1
+          }
       - name: Package verified files and checksum
         shell: pwsh
         run: |
