@@ -1,6 +1,18 @@
 # MyDarkRoom
 
-## Windows EXE (0.11.1)
+## 0.12.0: 자체 편집 창·Windows 저장·패널 초기 상태
+
+**[자체 창 Windows EXE 다운로드](https://github.com/jiminchoi/MyDarkRoom/releases/download/v0.12.0/MyDarkRoom-0.12.0-Windows-x64.zip)** · [Windows 검증 보고서](https://github.com/jiminchoi/MyDarkRoom/releases/download/v0.12.0/windows-smoke.json)
+
+기존 버전을 완전히 종료하고 ZIP 전체를 새 폴더에 푼 다음 `MyDarkRoom.exe`를 실행하세요. `_internal` 폴더도 함께 보관하세요.
+
+- Windows EXE는 **Microsoft Edge WebView2를 내장한 자체 창**에서 편집합니다. 별도 Edge/Chrome 탭과 작은 실행 창을 띄우지 않습니다. 창을 닫으면 진행 중인 JPEG 저장과 RAW 작업이 끝난 뒤 엔진/임시 파일을 정리합니다. 중복 실행은 기존 편집 창으로 연결합니다.
+- NEF 파일 선택과 드래그 앤 드롭은 기존 조작을 유지합니다. **JPEG 저장은 Windows 파일 저장 창**, 폴더 선택은 Windows 폴더 창을 사용합니다. 선택한 폴더에서는 같은 이름에 번호를 붙이고, 저장 창에서 덮어쓰기를 승인한 파일은 임시 파일을 완성한 뒤 교체합니다. 큰 JPEG를 JS 브리지로 전송하지 않고 Python에서 직접 저장합니다.
+- **새로 시작하거나 화면을 새로 고치면 빛(노출)만 펼칩니다.** 마스크를 포함한 다른 8개 항목은 이전에 저장된 펼침 상태와 관계없이 접습니다. 현재 작업 중에는 자유롭게 열고 닫을 수 있고, 다른 프리셋/사진 데이터는 지우지 않습니다.
+- 기존 RAW 현상, 4MP GPU 미리보기, 원본 기준 최대 200% 확대·이동, 공간 필드/마스크 캐시를 유지합니다. WebView2의 렌더러를 강제하고 구형 IE 엔진으로 자동 대체하지 않습니다. WebView2 런타임은 시스템 구성 요소를 사용하므로 별도 대형 브라우저 엔진을 ZIP에 넣지 않습니다. 런타임이 없다면 [Microsoft 공식 설치 파일](https://go.microsoft.com/fwlink/p/?LinkId=2124703)을 사용하세요. 대부분의 Windows에는 이미 설치되어 있습니다.
+- 자체 창의 프로필/사용자 프리셋은 `%LOCALAPPDATA%\MyDarkRoom\WebView2`에 보관하고 업데이트 후에도 유지합니다. **외부 Chrome/Edge의 프리셋은 해당 브라우저에서 JSON으로 내보내고 자체 앱에서 불러오세요.** 기존 브라우저 데이터는 변경하지 않습니다. 소스의 `start_windows.cmd`를 사용하는 브라우저 실행도 유지합니다.
+
+## 이전 브라우저 실행 EXE (0.11.1)
 
 **[Windows x64 EXE 다운로드](https://github.com/jiminchoi/MyDarkRoom/releases/download/v0.11.1/MyDarkRoom-0.11.1-Windows-x64.zip)** · [실제 Windows 검증 결과](https://github.com/jiminchoi/MyDarkRoom/releases/download/v0.11.1/windows-smoke.json)
 
