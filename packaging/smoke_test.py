@@ -133,7 +133,11 @@ def run(args):
                         debug_socket.bind(('127.0.0.1',0));debug_port=debug_socket.getsockname()[1]
                     process,state,url,elapsed=start('--webview-debug-port',str(debug_port),extra_env={'WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS':'--enable-unsafe-swiftshader --use-angle=swiftshader'})
                     assert state['port']==port,"Browser origin changed on restart"
-                    assert windows_visible_window(process.pid),"Native launcher window missing"
+                    deadline=time.monotonic()+45
+                    while not windows_visible_window(process.pid) and time.monotonic()<deadline:
+                        assert process.poll() is None,'Embedded window process exited early'
+                        time.sleep(.1)
+                    assert windows_visible_window(process.pid),"Native editor window missing"
                     from embedded_smoke import verify
                     report['restart_ready_seconds']=elapsed
                     report['checks'] += verify(process,profile,url,debug_port,args.nef,work)
