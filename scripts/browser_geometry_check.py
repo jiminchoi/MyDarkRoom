@@ -10,9 +10,10 @@ def check(browser,args,cpu=False):
     page=browser.new_page(viewport={"width":1440,"height":1100},device_scale_factor=1.5)
     if cpu:page.add_init_script("const get=HTMLCanvasElement.prototype.getContext;HTMLCanvasElement.prototype.getContext=function(t,...a){return t==='webgl2'?null:get.call(this,t,...a)}")
     errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
-    page.goto(args.url);page.locator('#file').set_input_files(args.nef)
+    page.goto(args.url);page.evaluate("document.querySelectorAll('details.category').forEach(e=>e.open=true)");page.locator('#file').set_input_files(args.nef)
     page.wait_for_function("!document.getElementById('controls').disabled",timeout=60000)
     def ready():page.wait_for_function("document.getElementById('status').textContent.includes('기하 보정 미리보기 완료')",timeout=60000)
+    page.locator('#geometry-auto-crop').uncheck()
     page.locator('#crop-edit').click();ready()
     # The source sample is landscape; derive the fitted image rectangle from metadata.
     text=page.locator('#dimensions').inner_text();w,h=map(int,text.split(' · ')[0].split(' × '))

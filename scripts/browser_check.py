@@ -72,6 +72,7 @@ def workflow(browser, args, *, cpu=False):
     page.on("pageerror", lambda e: errors.append(str(e)))
     page.on("request", lambda r: preview_requests.append(r.url) if "/preview" in r.url else None)
     page.goto(args.url)
+    page.evaluate("document.querySelectorAll('details.category').forEach(e=>e.open=true)")
     page.wait_for_function("!document.getElementById('renderer-mode').textContent.includes('확인 중')")
     if not cpu:
         assert "WebGL2" in page.locator("#renderer-mode").inner_text()

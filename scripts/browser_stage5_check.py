@@ -32,7 +32,7 @@ def workflow(browser,args,cpu=False):
     page=browser.new_page(viewport={"width":1440,"height":1100})
     if cpu:page.add_init_script("""const get=HTMLCanvasElement.prototype.getContext;HTMLCanvasElement.prototype.getContext=function(t,...a){return t==='webgl2'?null:get.call(this,t,...a)}""")
     errors=[];page.on("pageerror",lambda e:errors.append(str(e)))
-    page.goto(args.url);metadata=load(page,args.nef)
+    page.goto(args.url);page.evaluate("document.querySelectorAll('details.category').forEach(e=>e.open=true)");metadata=load(page,args.nef)
     if not cpu:shader_checks(page)
     exposure=page.locator("#exposure");exposure.focus();page.keyboard.press("ArrowRight")
     assert exposure.input_value()=="0.01"
@@ -80,7 +80,7 @@ def stress(browser,args):
         p['create'+kind]=function(...a){const v=c.apply(this,a);if(v)values.add(v);return v};
         p['delete'+kind]=function(v){values.delete(v);return d.call(this,v)};
       }""")
-    page.goto(args.url);cdp=page.context.new_cdp_session(page);measurements=[]
+    page.goto(args.url);page.evaluate("document.querySelectorAll('details.category').forEach(e=>e.open=true)");cdp=page.context.new_cdp_session(page);measurements=[]
     for i in range(args.iterations+3):
         photo=load(page,args.nef)
         page.locator("#mask-kind").select_option("gradient");page.locator("#mask-add").click()

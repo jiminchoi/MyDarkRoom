@@ -22,6 +22,7 @@ def workflow(browser,args,cpu=False):
         if any(x in r.url for x in ["/masked-pixels","/preview","/export"]) and r.method=="POST":states.append(r.post_data_json)
     page.on("request",request)
     page.goto(args.url)
+    page.evaluate("document.querySelectorAll('details.category').forEach(e=>e.open=true)")
     with page.expect_response(lambda r:r.url.endswith("/api/photos") and r.request.method=="POST") as response:
         page.locator("#file").set_input_files(args.nef)
     photo=response.value.json();page.wait_for_function("!document.getElementById('controls').disabled",timeout=60000)

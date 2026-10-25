@@ -182,7 +182,7 @@ def index():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "rawpy": rawpy.__version__, "libraw": ".".join(map(str, rawpy.libraw_version)),"dng_converter":bool(converter_path()),"app_version":"0.7.0"}
+    return {"status": "ok", "rawpy": rawpy.__version__, "libraw": ".".join(map(str, rawpy.libraw_version)),"dng_converter":bool(converter_path()),"app_version":"0.7.1"}
 
 
 @app.post("/api/photos")

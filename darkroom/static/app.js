@@ -16,7 +16,8 @@ const settings = (includeMasks=true) => ({curve_points:customCurve ? structuredC
 let canvas = $("preview"), gpu, context;
 let photo = null, opening = false, exporting = false, comparing = false, split = false;
 let mode = "fit", pan = [0,0], detail = null, cpuOriginal = null, cpuEdited = null;
-let revision = 0, detailRevision = 0, editTimer, detailTimer, histogramTimer, frame;
+let revision = 0, detailRevision = 0, editTimer, detailTimer, histogramTimer, frame, outputFrame;
+let interacting=false,geometryRenderedRevision=-1;
 let cpuRenderedRevision=-1;
 let cpuRunning = false, histogramRunning = false, detailAbort;
 const worker = new Worker("/static/histogram-worker.js");
@@ -87,7 +88,7 @@ $("canvas").addEventListener("webglcontextlost", async (event) => {
   event.preventDefault(); if (!gpu) return;
   cpuCanvas(); clearDetail(); revision++;
   if (photo) {
-    try { await loadCpu(photo); await refreshCpu(); resize(); scheduleHistogram(); scheduleDetail(); }
+    try { await loadCpu(photo); await refreshCpu();geometryEditor?.refresh(settings(),defaults); resize(); scheduleHistogram(); scheduleDetail(); }
     catch (e) { error(e.message); }
   }
   error("GPU 연결이 해제되어 CPU 미리보기로 전환했습니다.");
@@ -102,8 +103,19 @@ function view() {
 }
 function render() {
   if (!photo || !canvas.width || !canvas.height) return;
-  $("geometry-view").hidden=!geometryEditor?.active;
-  if(geometryEditor?.active){geometryEditor.draw($("geometry-view").getContext("2d"),canvas.width,canvas.height,{before:comparing,split,fraction:Number($("split-position").value)/100});$("mask-overlay").getContext("2d").clearRect(0,0,canvas.width,canvas.height);$("compare-label").hidden=!comparing;$("split-line").hidden=!split||comparing;$("split-line").style.left=$("split-position").value+"%";return;}
+  $("geometry-view").hidden=!geometryEditor?.active||(Boolean(gpu)&&!geometryEditor.editing);
+  if(geometryEditor?.active){
+    if(gpu){
+      const state=geometryEditor.gpuState(canvas.width,canvas.height);
+      gpu.draw(settings(false),state.view,{before:comparing,split,splitPosition:Number($("split-position").value)/100,geometry:state.geometry});
+      if(geometryRenderedRevision!==revision){geometryRenderedRevision=revision;status("기하 보정 미리보기 완료 · WebGL2");}
+    }
+    geometryEditor.draw($("geometry-view").getContext("2d"),canvas.width,canvas.height,{before:comparing,split,fraction:Number($("split-position").value)/100,guidesOnly:Boolean(gpu)});
+    $("mask-overlay").getContext("2d").clearRect(0,0,canvas.width,canvas.height);
+    $("compare-label").hidden=!comparing;$("split-line").hidden=!split||comparing;$("split-line").style.left=$("split-position").value+"%";
+    canvas.dataset.renderRevision=revision;canvas.dataset.geometryRenderer=gpu?"webgl2":"cpu";return;
+  }
+  delete canvas.dataset.geometryRenderer;
   const v = view(), fraction = Number($("split-position").value)/100;
   if (gpu) gpu.draw(settings(false),v,{before:comparing,split,splitPosition:fraction});
   else if (cpuOriginal) {
@@ -122,6 +134,7 @@ function render() {
       context.save(); context.beginPath(); context.rect(0,0,canvas.width*fraction,canvas.height); context.clip(); draw(true); context.restore();
     }
   }
+  canvas.dataset.renderRevision=revision;
   drawMaskOverlay(v);
   $("compare-label").hidden = !comparing;
   $("split-line").hidden = !split || comparing;
@@ -169,17 +182,17 @@ async function openFile(file) {
 }
 function scheduleEdits(event) {
   if (event?.target?.id.startsWith("curve_")) {customCurve=null;constrainCurve(event.target);}
-  revision++; updateOutputs();
+  revision++;cancelAnimationFrame(outputFrame);outputFrame=requestAnimationFrame(updateOutputs);
   if (gpu && maskBusy && maskEditor.key===appliedMaskKey) {maskGeneration++;clearTimeout(maskTimer);maskBusy=false;availability();}
   if (gpu && maskEditor.key!==appliedMaskKey) {scheduleMaskBake();}
   else if (gpu) { queueRender(); status(gpu.software ? "보정 완료 · WebGL2 소프트웨어" : "보정 완료 · WebGL2 미리보기"); scheduleHistogram(); }
-  else { clearTimeout(editTimer); status("보정 적용 중…"); editTimer=setTimeout(refreshCpu,100); }
+  else if(!geometryEditor?.active) { clearTimeout(editTimer); status("보정 적용 중…"); editTimer=setTimeout(refreshCpu,100); }
   scheduleOverlay();
   availability();
-  geometryEditor?.refresh(settings(),defaults);
+  geometryEditor?.refresh(gpu?null:settings(),defaults,Boolean(gpu));
 }
 async function refreshCpu() {
-  if (!photo || cpuRunning || opening || exporting || gpu) return;
+  if (!photo || cpuRunning || opening || exporting || gpu || geometryEditor?.active) return;
   cpuRunning = true; const version=revision, id=photo.id;
   try {
     const image=await createImageBitmap(await (await postImage(id,"preview",{...settings(),geometry:geometryDefaults()})).blob());
@@ -191,13 +204,18 @@ async function refreshCpu() {
   finally { cpuRunning=false; if (version !== revision && !opening && !exporting) refreshCpu(); }
 }
 
-function scheduleHistogram() { clearTimeout(histogramTimer); histogramTimer=setTimeout(updateHistogram,180); }
+function scheduleHistogram() { clearTimeout(histogramTimer);if(!interacting)histogramTimer=setTimeout(updateHistogram,220); }
+// Keep full-resolution histogram readback off the slider/curve drag path.
+document.addEventListener("pointerdown",event=>{if(event.target.matches('input[type="range"],#tone-curve')){interacting=true;clearTimeout(histogramTimer);}},true);
+for(const name of ["pointerup","pointercancel"])document.addEventListener(name,()=>{if(interacting){interacting=false;scheduleHistogram();}},true);
+window.addEventListener("blur",()=>{interacting=false;scheduleHistogram();});
 function updateHistogram() {
-  if (!photo || opening || histogramRunning || maskBusy) return;
-  if(geometryEditor?.active ? geometryEditor.pending : !gpu&&cpuRenderedRevision!==revision)return;
+  if (!photo || opening || histogramRunning || maskBusy || interacting) return;
+  if(!gpu&&(geometryEditor?.active ? geometryEditor.pending : cpuRenderedRevision!==revision))return;
   try {
     let pixels;
-    if (geometryEditor?.active && geometryEditor.bitmap) {
+    if(gpu&&geometryEditor?.active){const state=geometryEditor.gpuState(canvas.width,canvas.height,true);pixels=gpu.histogram(settings(false),state.view,state.geometry);render();}
+    else if (geometryEditor?.active && geometryEditor.bitmap) {
       const image=geometryEditor.bitmap,c=geometryEditor.editing?geometryEditor.value.crop:[0,0,1,1];
       const offscreen=document.createElement("canvas");offscreen.width=Math.max(1,Math.round(image.width*c[2]));offscreen.height=Math.max(1,Math.round(image.height*c[3]));
       const ctx=offscreen.getContext("2d");ctx.drawImage(image,c[0]*image.width,c[1]*image.height,c[2]*image.width,c[3]*image.height,0,0,offscreen.width,offscreen.height);pixels=ctx.getImageData(0,0,offscreen.width,offscreen.height).data;
@@ -594,8 +612,8 @@ $("auto-light").onclick=async()=>{
 // Categories have stable DOM controls, keeping disabled states and preset semantics.
 function category(element,title,key){
  const details=document.createElement("details"),summary=document.createElement("summary");details.className="category";details.dataset.category=key;summary.textContent=title;
- try{details.open=localStorage.getItem("mydarkroom.category."+key)!=="closed";}catch{details.open=true;}
- element.before(details);details.append(summary,element);details.addEventListener("toggle",()=>{try{localStorage.setItem("mydarkroom.category."+key,details.open?"open":"closed");}catch{}});
+ try{const saved=localStorage.getItem("mydarkroom.category.v2."+key);details.open=saved===null?key==="빛":saved==="open";}catch{details.open=key==="빛";}
+ element.before(details);details.append(summary,element);details.addEventListener("toggle",()=>{try{localStorage.setItem("mydarkroom.category.v2."+key,details.open?"open":"closed");}catch{}});
  return details;
 }
 category($("preset-tools"),"프리셋","presets");

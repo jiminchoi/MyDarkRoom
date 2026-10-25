@@ -15,6 +15,8 @@ def check(browser,args,cpu=False):
     if not cpu:shader_checks(page)
     names=page.locator('details.category>summary').all_text_contents()
     assert names==['프리셋','빛','색','톤 커브','흑백 채널 믹서','색조','그레인','크롭 · 수평 · 업라이트','마스크'],names
+    assert page.locator('details.category').evaluate_all("es=>es.filter(e=>e.open).map(e=>e.dataset.category)")==['빛']
+    page.evaluate("document.querySelectorAll('details.category').forEach(e=>e.open=true)")
     for width,height in [(1920,1080),(1440,900),(1024,768)]:
         page.set_viewport_size({'width':width,'height':height})
         assert page.evaluate('document.documentElement.scrollHeight<=innerHeight+1')
@@ -71,6 +73,8 @@ def check(browser,args,cpu=False):
     page.reload();assert not page.locator('[data-category="색"]').evaluate('e=>e.open')
     # Upload again because photo sessions are intentionally not restored on reload.
     page.locator('#file').set_input_files(args.nef);page.wait_for_function("!document.getElementById('controls').disabled",timeout=60000)
+    page.evaluate("document.querySelectorAll('details.category').forEach(e=>e.open=true)")
+    page.locator('#geometry-auto-crop').uncheck()
     page.locator('#crop-ratio').select_option('original')
     def ready():page.wait_for_function("document.getElementById('status').textContent.includes('기하 보정 미리보기 완료')",timeout=60000)
     ready()

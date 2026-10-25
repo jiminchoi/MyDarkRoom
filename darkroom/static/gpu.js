@@ -14,6 +14,9 @@ uniform bool hasMaskedSource, hasMaskedDetail;
 uniform vec2 outputSize, fullSize, offset, origin, detailOrigin;
 uniform float scale, splitPosition;
 uniform bool hasDetail, before, split, histogram;
+uniform bool geometryEnabled;
+uniform mat3 inverseGeometry;
+uniform vec2 geometrySize, cropOrigin;
 uniform vec4 light;
 uniform vec3 color;
 uniform bool monochrome;
@@ -38,14 +41,20 @@ vec3 sample16(usampler2D tex, vec2 uv) {
 }
 void main() {
   vec2 screen = vec2(gl_FragCoord.x, outputSize.y-gl_FragCoord.y);
-  vec2 p = histogram ? screen/outputSize*fullSize : (screen-offset)/scale+origin;
-  if (any(lessThan(p,vec2(0))) || any(greaterThanEqual(p,fullSize))) {
+  vec2 extent=geometryEnabled ? geometrySize : fullSize;
+  vec2 p = histogram ? screen/outputSize*extent : (screen-offset)/scale+origin;
+  if (any(lessThan(p,vec2(0))) || any(greaterThanEqual(p,extent))) {
     result=vec4(vec3(16.,18.,18.)/255.,1.); return;
+  }
+  if(geometryEnabled){
+    vec3 sourcePoint=inverseGeometry*vec3(p+cropOrigin,1.);
+    p=sourcePoint.xy/sourcePoint.z;
+    if(sourcePoint.z<=0. || any(lessThan(p,vec2(0))) || any(greaterThanEqual(p,fullSize))){result=vec4(vec3(16.,18.,18.)/255.,1.);return;}
   }
   bool original = !histogram && (before || (split && screen.x < outputSize.x*splitPosition));
   vec3 x = hasMaskedSource && !original ? sample16(maskedSource,p/fullSize) : sample16(source, p/fullSize);
   vec2 dp = p-detailOrigin;
-  if (hasDetail && !histogram && all(greaterThanEqual(dp,vec2(0))) && all(lessThan(dp,vec2(textureSize(detail,0))))) {
+  if (hasDetail && !histogram && !geometryEnabled && all(greaterThanEqual(dp,vec2(0))) && all(lessThan(dp,vec2(textureSize(detail,0))))) {
     x = sample16(detail, dp/vec2(textureSize(detail,0)));
     if (hasMaskedDetail && !original) x=sample16(maskedDetail, dp/vec2(textureSize(detail,0)));
   }
@@ -103,7 +112,7 @@ export class GpuRenderer {
     const position = gl.getAttribLocation(this.program, "position");
     gl.enableVertexAttribArray(position); gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
     this.locations = {};
-    for (const name of ["source","detail","outputSize","fullSize","offset","origin","detailOrigin","scale","splitPosition","hasDetail","before","split","histogram","light","color","monochrome","mixer","tone","toneAmount","grain","grainSize","maskedSource","maskedDetail","hasMaskedSource","hasMaskedDetail"]) this.locations[name] = gl.getUniformLocation(this.program, name);
+    for (const name of ["source","detail","outputSize","fullSize","offset","origin","detailOrigin","scale","splitPosition","hasDetail","before","split","histogram","light","color","monochrome","mixer","tone","toneAmount","grain","grainSize","maskedSource","maskedDetail","hasMaskedSource","hasMaskedDetail","geometryEnabled","inverseGeometry","geometrySize","cropOrigin"]) this.locations[name] = gl.getUniformLocation(this.program, name);
     gl.uniform1i(this.locations.source, 0); gl.uniform1i(this.locations.detail, 1);
     gl.uniform1i(this.locations.maskedSource,2);gl.uniform1i(this.locations.maskedDetail,3);
     this.locations.masterCurve=gl.getUniformLocation(this.program,"masterCurve[0]");
@@ -139,16 +148,22 @@ export class GpuRenderer {
     this.clearDetail(); this.detailTexture = texture; this.detailOrigin = [data.x, data.y];
     if (masked) this.maskedDetailTexture=this.upload(masked);
   }
-  draw(settings, view, { before = false, split = false, splitPosition = .5, histogram = false } = {}) {
+  draw(settings, view, { before = false, split = false, splitPosition = .5, histogram = false, geometry = null } = {}) {
     if (!this.texture) return;
     const gl = this.gl, u = this.locations;
-    const width = histogram ? this.width : this.canvas.width, height = histogram ? this.height : this.canvas.height;
+    const width = histogram ? this.target.width : this.canvas.width, height = histogram ? this.target.height : this.canvas.height;
     gl.useProgram(this.program); gl.viewport(0,0,width,height);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,this.texture);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D,this.detailTexture || this.texture);
     gl.activeTexture(gl.TEXTURE2);gl.bindTexture(gl.TEXTURE_2D,this.maskedTexture || this.texture);
     gl.activeTexture(gl.TEXTURE3);gl.bindTexture(gl.TEXTURE_2D,this.maskedDetailTexture || this.detailTexture || this.texture);
     gl.uniform1i(u.hasMaskedSource,Boolean(this.maskedTexture));gl.uniform1i(u.hasMaskedDetail,Boolean(this.maskedDetailTexture));
+    gl.uniform1i(u.geometryEnabled,Boolean(geometry));
+    if(geometry){
+      const m=geometry.inverse;
+      gl.uniformMatrix3fv(u.inverseGeometry,false,new Float32Array([m[0],m[3],m[6],m[1],m[4],m[7],m[2],m[5],m[8]]));
+      gl.uniform2fv(u.geometrySize,geometry.size);gl.uniform2fv(u.cropOrigin,geometry.cropOrigin);
+    }
     gl.uniform2f(u.outputSize,width,height); gl.uniform2f(u.fullSize,this.photo.width,this.photo.height);
     gl.uniform2fv(u.offset,view.offset); gl.uniform2fv(u.origin,view.origin);
     gl.uniform2fv(u.detailOrigin,this.detailOrigin || [0,0]); gl.uniform1f(u.scale,view.scale);
@@ -156,8 +171,8 @@ export class GpuRenderer {
     gl.uniform1i(u.histogram,histogram); gl.uniform1f(u.splitPosition,splitPosition);
     gl.uniform4f(u.light,settings.exposure,settings.contrast,settings.highlights,settings.shadows);
     gl.uniform3f(u.color,settings.temperature,settings.tint,settings.saturation);
-    const lut=curveLut(settings);gl.uniform4fv(u.masterCurve,lut);
-    gl.uniform1i(u.curveEnabled,lut.some((v,i)=>Math.abs(v-i/255)>1e-7));
+    const curveKey=JSON.stringify([settings.curve_points,settings.curve_black,settings.curve_shadow,settings.curve_mid,settings.curve_light,settings.curve_white]);
+    if(this.curveKey!==curveKey){const lut=curveLut(settings);gl.uniform4fv(u.masterCurve,lut);gl.uniform1i(u.curveEnabled,lut.some((v,i)=>Math.abs(v-i/255)>1e-7));this.curveKey=curveKey;}
     gl.uniform1i(u.monochrome,Boolean(settings.monochrome));
     const weights=[settings.mix_red ?? 30,settings.mix_green ?? 59,settings.mix_blue ?? 11];
     const total=weights.reduce((a,b)=>a+b,0);
@@ -169,26 +184,29 @@ export class GpuRenderer {
     gl.uniform1f(u.toneAmount,settings.tone_amount ?? 0); gl.uniform1f(u.grain,settings.grain ?? 0); gl.uniform1f(u.grainSize,settings.grain_size ?? 1);
     gl.drawArrays(gl.TRIANGLES,0,6);
   }
-  histogram(settings, view) {
+  histogram(settings, view, geometry=null) {
     const gl = this.gl;
+    const width=geometry?Math.max(1,Math.round(this.width*geometry.size[0]/this.photo.width)):this.width;
+    const height=geometry?Math.max(1,Math.round(this.height*geometry.size[1]/this.photo.height)):this.height;
+    if(this.target&&(this.target.width!==width||this.target.height!==height)){gl.deleteFramebuffer(this.target.framebuffer);gl.deleteTexture(this.target.texture);this.target=null;}
     if (!this.target) {
       const texture = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,texture);
       gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
-      gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA8,this.width,this.height,0,gl.RGBA,gl.UNSIGNED_BYTE,null);
+      gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA8,width,height,0,gl.RGBA,gl.UNSIGNED_BYTE,null);
       const framebuffer = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER,framebuffer);
       gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,texture,0);
       if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
         gl.bindFramebuffer(gl.FRAMEBUFFER,null); gl.deleteFramebuffer(framebuffer); gl.deleteTexture(texture);
         throw new Error("Histogram framebuffer unavailable");
       }
-      this.target = { texture, framebuffer };
+      this.target = { texture, framebuffer, width, height };
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER,this.target.framebuffer);
     try {
-      this.draw(settings,view,{histogram:true});
-      const pixels = new Uint8Array(this.width*this.height*4);
-      gl.readPixels(0,0,this.width,this.height,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
+      this.draw(settings,view,{histogram:true,geometry});
+      const pixels = new Uint8Array(width*height*4);
+      gl.readPixels(0,0,width,height,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
       if (gl.getError() !== gl.NO_ERROR) throw new Error("Histogram GPU readback failed");
       return pixels;
     } finally { gl.bindFramebuffer(gl.FRAMEBUFFER,null); }
