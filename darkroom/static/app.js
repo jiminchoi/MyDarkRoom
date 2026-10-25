@@ -1,3 +1,4 @@
+import {curveLut,curvePoints,validCurve} from "./curves.js";
 import { GpuRenderer } from "./gpu.js";
 import {GeometryEditor,geometryDefaults} from "./geometry.js";
 let geometryEditor;
@@ -9,12 +10,14 @@ let overlayTimer, overlayGeneration=0, overlayAbort, overlayKey="";
 
 const $ = (id) => document.getElementById(id);
 const inputs = [...document.querySelectorAll('#controls input[type="range"]')];
-const defaults = {...Object.fromEntries(inputs.map((input) => [input.id, Number(input.defaultValue)])), monochrome:false};
-const settings = (includeMasks=true) => ({...Object.fromEntries(inputs.map((input) => [input.id, Number(input.value)])), monochrome:$("monochrome").checked,geometry:geometryEditor?.value || geometryDefaults(),masks:includeMasks ? maskEditor?.masks || [] : []});
+let customCurve=null;
+const defaults = {...Object.fromEntries(inputs.map((input) => [input.id, Number(input.defaultValue)])), monochrome:false,curve_points:null};
+const settings = (includeMasks=true) => ({curve_points:customCurve ? structuredClone(customCurve) : null,...Object.fromEntries(inputs.map((input) => [input.id, Number(input.value)])), monochrome:$("monochrome").checked,geometry:geometryEditor?.value || geometryDefaults(),masks:includeMasks ? maskEditor?.masks || [] : []});
 let canvas = $("preview"), gpu, context;
 let photo = null, opening = false, exporting = false, comparing = false, split = false;
 let mode = "fit", pan = [0,0], detail = null, cpuOriginal = null, cpuEdited = null;
 let revision = 0, detailRevision = 0, editTimer, detailTimer, histogramTimer, frame;
+let cpuRenderedRevision=-1;
 let cpuRunning = false, histogramRunning = false, detailAbort;
 const worker = new Worker("/static/histogram-worker.js");
 
@@ -41,6 +44,8 @@ async function checked(response) {
 }
 function updateOutputs() {
   drawCurve();
+  $("tone-swatch").style.background=`hsl(${$("tone_hue").value} 65% 60%)`;
+  const hue=Number($("tone_hue").value);$("tone-color").textContent=`${hue}° · ${["빨강","주황","노랑","연두","초록","청록","하늘","파랑","보라","자홍","분홍","빨강"][Math.min(11,Math.floor(hue/30))]}`;
   for (const input of inputs) document.querySelector(`output[for="${input.id}"]`).textContent = input.id === "exposure" ? Number(input.value).toFixed(2) : input.value;
 }
 async function postImage(id, kind, values, signal) {
@@ -76,7 +81,7 @@ function clearDetail() {
 async function loadCpu(next) {
   const image = await createImageBitmap(await (await postImage(next.id,"preview",defaults)).blob());
   if (cpuEdited !== cpuOriginal) closeBitmap(cpuEdited); closeBitmap(cpuOriginal);
-  cpuOriginal = cpuEdited = image;
+  cpuOriginal = cpuEdited = image;cpuRenderedRevision=opening?revision:-1;
 }
 $("canvas").addEventListener("webglcontextlost", async (event) => {
   event.preventDefault(); if (!gpu) return;
@@ -163,7 +168,7 @@ async function openFile(file) {
   finally { opening = false; busy(null); availability(); $("file").value=""; }
 }
 function scheduleEdits(event) {
-  if (event?.target?.id.startsWith("curve_")) constrainCurve(event.target);
+  if (event?.target?.id.startsWith("curve_")) {customCurve=null;constrainCurve(event.target);}
   revision++; updateOutputs();
   if (gpu && maskBusy && maskEditor.key===appliedMaskKey) {maskGeneration++;clearTimeout(maskTimer);maskBusy=false;availability();}
   if (gpu && maskEditor.key!==appliedMaskKey) {scheduleMaskBake();}
@@ -180,7 +185,7 @@ async function refreshCpu() {
     const image=await createImageBitmap(await (await postImage(id,"preview",{...settings(),geometry:geometryDefaults()})).blob());
     if (version === revision && photo.id === id) {
       if (cpuEdited !== cpuOriginal) closeBitmap(cpuEdited);
-      cpuEdited=image; clearDetail(); render(); scheduleHistogram(); scheduleDetail(); status("보정 완료 · CPU 미리보기");
+      cpuEdited=image;cpuRenderedRevision=version; clearDetail(); render(); scheduleHistogram(); scheduleDetail(); status("보정 완료 · CPU 미리보기");
     } else closeBitmap(image);
   } catch (e) { if (version === revision) error(e.message); }
   finally { cpuRunning=false; if (version !== revision && !opening && !exporting) refreshCpu(); }
@@ -189,6 +194,7 @@ async function refreshCpu() {
 function scheduleHistogram() { clearTimeout(histogramTimer); histogramTimer=setTimeout(updateHistogram,180); }
 function updateHistogram() {
   if (!photo || opening || histogramRunning || maskBusy) return;
+  if(geometryEditor?.active ? geometryEditor.pending : !gpu&&cpuRenderedRevision!==revision)return;
   try {
     let pixels;
     if (geometryEditor?.active && geometryEditor.bitmap) {
@@ -347,11 +353,11 @@ const builtins=[
  {id:"silver",name:"실버 그레인",values:{...defaults,monochrome:true,mix_red:45,mix_green:45,mix_blue:10,contrast:30,grain:45}}
 ];
 let custom=[];
-function curveDefaults(v) {return {...Object.fromEntries(Object.entries(defaults).filter(([k])=>k.startsWith("curve_"))),...v};}
+function curveDefaults(v) {return {curve_points:null,...Object.fromEntries(Object.entries(defaults).filter(([k])=>k.startsWith("curve_"))),...v};}
 function validValues(v) {
  v=curveDefaults(v);
  const points=["black","shadow","mid","light","white"].map(k=>v["curve_"+k]);
- return points.every((v,i)=>!i||v>=points[i-1]) && v && typeof v.monochrome==="boolean" && inputs.every(i=>Number.isFinite(v[i.id]) && v[i.id]>=Number(i.min) && v[i.id]<=Number(i.max));
+ return validCurve(v.curve_points) && points.every((v,i)=>!i||v>=points[i-1]) && v && typeof v.monochrome==="boolean" && inputs.every(i=>Number.isFinite(v[i.id]) && v[i.id]>=Number(i.min) && v[i.id]<=Number(i.max));
 }
 try {
  const saved=JSON.parse(localStorage.getItem(storageKey) || "[]");
@@ -367,6 +373,7 @@ function listPresets(selected="") {
 }
 function setControls(v) {
  v=curveDefaults(v);
+ customCurve=v.curve_points ? structuredClone(v.curve_points) : null;
  for (const input of inputs) input.value=v[input.id];
  $("monochrome").checked=v.monochrome;
  if (v.geometry && geometryEditor) geometryEditor.set(v.geometry);
@@ -522,26 +529,31 @@ function drawCurve() {
  const chart=$("tone-curve");if (!chart) return;
  const ctx=chart.getContext("2d"),w=chart.width,h=chart.height;ctx.clearRect(0,0,w,h);
  ctx.strokeStyle="#3b4540";ctx.lineWidth=1;
- for (let i=0;i<=4;i++) {ctx.beginPath();ctx.moveTo(i*w/4,0);ctx.lineTo(i*w/4,h);ctx.stroke();ctx.beginPath();ctx.moveTo(0,i*h/4);ctx.lineTo(w,i*h/4);ctx.stroke();}
- ctx.strokeStyle="#e8ad74";ctx.lineWidth=2;ctx.beginPath();
- const ids=["black","shadow","mid","light","white"].map(k=>"curve_"+k);
- ids.forEach((id,i)=>{const x=3+i*(w-6)/4,y=h-3-Number($(id).value)/100*(h-6);if (!i)ctx.moveTo(x,y);else ctx.lineTo(x,y);});ctx.stroke();
- for (let i=0;i<5;i++) {ctx.beginPath();ctx.arc(3+i*(w-6)/4,h-3-Number($(ids[i]).value)/100*(h-6),3,0,Math.PI*2);ctx.fillStyle="#e8ad74";ctx.fill();}
+ for(let i=0;i<=4;i++){ctx.beginPath();ctx.moveTo(i*w/4,0);ctx.lineTo(i*w/4,h);ctx.moveTo(0,i*h/4);ctx.lineTo(w,i*h/4);ctx.stroke();}
+ const values=settings(false),lut=curveLut(values);ctx.strokeStyle="#e8ad74";ctx.lineWidth=2;ctx.beginPath();
+ lut.forEach((v,i)=>{const x=4+i/255*(w-8),y=h-4-v*(h-8);if(!i)ctx.moveTo(x,y);else ctx.lineTo(x,y);});ctx.stroke();
+ for(const [x,y] of curvePoints(values)){ctx.beginPath();ctx.arc(4+x*(w-8),h-4-y*(h-8),4,0,Math.PI*2);ctx.fillStyle="#e8ad74";ctx.fill();}
 }
-let curveDrag=-1;
+let curveDrag=-1,curveBefore=null;
+function curvePosition(event){const r=$("tone-curve").getBoundingClientRect();return [Math.max(0,Math.min(1,(event.clientX-r.left-4*r.width/256)/(r.width*248/256))),Math.max(0,Math.min(1,1-(event.clientY-r.top-4*r.height/180)/(r.height*172/180)))];}
+function nearestCurve(point){const r=$("tone-curve").getBoundingClientRect();return curvePoints(settings(false)).findIndex(p=>Math.hypot((p[0]-point[0])*r.width,(p[1]-point[1])*r.height)<12);}
 $("tone-curve").onpointerdown=event=>{
- if (!photo||opening||exporting) return;
- const rect=$("tone-curve").getBoundingClientRect();curveDrag=Math.max(0,Math.min(4,Math.round((event.clientX-rect.left)/rect.width*4)));
- $("tone-curve").setPointerCapture(event.pointerId);curveMove(event);
+ if(!photo||opening||exporting||event.button!==0)return;
+ const point=curvePosition(event);curveBefore=customCurve?structuredClone(customCurve):null;curveDrag=nearestCurve(point);
+ const next=structuredClone(curvePoints(settings(false)));
+ if(curveDrag<0){if(next.length>=32||next.some(p=>Math.abs(p[0]-point[0])<.002))return;next.push(point);next.sort((a,b)=>a[0]-b[0]);curveDrag=next.indexOf(point);}
+ customCurve=next;
+ $("tone-curve").setPointerCapture(event.pointerId);scheduleEdits();
 };
-function curveMove(event) {
- if (curveDrag<0) return;
- const rect=$("tone-curve").getBoundingClientRect(),input=$(curveIds[curveDrag]);
- input.value=Math.round(Math.max(0,Math.min(100,(1-(event.clientY-rect.top)/rect.height)*100)));
- constrainCurve(input);scheduleEdits();
+function curveMove(event){
+ if(curveDrag<0)return;
+ const p=curvePosition(event),i=curveDrag,n=customCurve.length;
+ p[0]=i===0?0:i===n-1?1:Math.max(customCurve[i-1][0]+.002,Math.min(customCurve[i+1][0]-.002,p[0]));customCurve[i]=p;scheduleEdits();
 }
 $("tone-curve").onpointermove=curveMove;
-for (const name of ["pointerup","pointercancel","lostpointercapture"]) $("tone-curve").addEventListener(name,()=>{if (curveDrag>=0) {curveDrag=-1;record();}});
+for(const name of ["pointerup","pointercancel","lostpointercapture"])$("tone-curve").addEventListener(name,()=>{if(curveDrag>=0){if(name==="pointercancel"){customCurve=curveBefore;scheduleEdits();}curveDrag=-1;record();}});
+$("tone-curve").ondblclick=event=>{if(!photo||opening||exporting)return;const i=nearestCurve(curvePosition(event));if(i>0&&i<customCurve?.length-1){customCurve.splice(i,1);scheduleEdits();record();}};
+$("curve-reset").onclick=()=>{customCurve=[[0,0],[1,1]];for(const id of curveIds)$(id).value=defaults[id];scheduleEdits();record();};
 document.addEventListener("keydown",event=>{
  const input=event.target;
  if (!(input instanceof HTMLInputElement) || input.type!=="range" || !["ArrowLeft","ArrowRight"].includes(event.key) || input.disabled) return;
@@ -562,5 +574,33 @@ window.addEventListener("pagehide",event=>{
 geometryEditor=new GeometryEditor({getPhoto:()=>photo,onChange:commit=>{mode="fit";clearDetail();availability();scheduleEdits();if(commit)record();},onView:()=>{queueRender();scheduleHistogram();},onError:error,onMessage:status});
 let geometryPointer=null;
 $("canvas").addEventListener("pointerdown",event=>{if(opening||exporting||!photo||event.button!==0)return;if(geometryEditor.down(event)){event.preventDefault();event.stopImmediatePropagation();geometryPointer=event.pointerId;$("canvas").setPointerCapture(event.pointerId);}},true);
-$("canvas").addEventListener("pointermove",event=>{if(geometryPointer!==event.pointerId)return;event.preventDefault();event.stopImmediatePropagation();geometryEditor.move(event);},true);
+$("canvas").addEventListener("pointermove",event=>{if(geometryPointer!==event.pointerId){geometryEditor.hover(event);return;}event.preventDefault();event.stopImmediatePropagation();geometryEditor.move(event);},true);
 for(const name of ["pointerup","pointercancel","lostpointercapture"])$("canvas").addEventListener(name,event=>{if(geometryPointer!==event.pointerId)return;event.stopImmediatePropagation();geometryPointer=null;geometryEditor.up(name==="pointercancel");},true);
+
+// Native ranges retain keyboard operation; double-click restores each own default.
+document.addEventListener("dblclick",event=>{
+ const input=event.target.closest('input[type="range"]');
+ if(!input||input.matches(':disabled')||input.closest('fieldset:disabled'))return;
+ input.value=input.defaultValue;input.dispatchEvent(new Event("input",{bubbles:true}));input.dispatchEvent(new Event("change",{bubbles:true}));
+});
+$("auto-light").onclick=async()=>{
+ if(!photo||opening||exporting)return;const id=photo.id,version=revision;$("auto-light").disabled=true;
+ try{const response=await checked(await fetch(`/api/photos/${id}/auto-light`,{method:"POST"}));const result=await response.json();
+ if(photo?.id!==id||revision!==version)return;
+ for(const [key,value] of Object.entries(result.adjustments))$(key).value=value;
+ scheduleEdits();record();status("자동 밝기 보정 완료 · 채도와 색 설정 유지");
+ }catch(e){error(e.message);}finally{$("auto-light").disabled=false;}
+};
+// Categories have stable DOM controls, keeping disabled states and preset semantics.
+function category(element,title,key){
+ const details=document.createElement("details"),summary=document.createElement("summary");details.className="category";details.dataset.category=key;summary.textContent=title;
+ try{details.open=localStorage.getItem("mydarkroom.category."+key)!=="closed";}catch{details.open=true;}
+ element.before(details);details.append(summary,element);details.addEventListener("toggle",()=>{try{localStorage.setItem("mydarkroom.category."+key,details.open?"open":"closed");}catch{}});
+ return details;
+}
+category($("preset-tools"),"프리셋","presets");
+const groups=[...document.querySelectorAll("#controls > .control-group")];
+for(const name of ["빛","색","톤 커브","흑백 채널 믹서","색조","그레인"]){
+ const group=groups.find(g=>g.querySelector("h3").firstChild.textContent.trim()===name);$("controls").append(group);const heading=group.querySelector("h3");heading.hidden=true;category(group,name,name);
+}
+category($("geometry-panel"),"크롭 · 수평 · 업라이트","geometry");category($("mask-panel"),"마스크","masks");

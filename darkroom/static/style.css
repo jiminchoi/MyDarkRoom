@@ -21,3 +21,23 @@
 #raw-help{color:#ffe0ae;white-space:nowrap;font-size:11px}#error{max-height:40dvh;overflow:auto}#export-error{color:#edb087;font-size:12px;line-height:1.7}
 #gradient-properties{padding-top:14px;border-top:1px solid var(--border)}#density-curve{width:100%;height:90px;background:#151818;border:1px solid var(--border);border-radius:4px;margin-bottom:16px}#density-reset{font-size:11px;margin-bottom:12px}#density-help{display:block;line-height:1.7}
 #geometry-view{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}#geometry-tools{border:1px solid var(--border);border-radius:6px;padding:14px;margin-bottom:18px}#geometry-tools legend{color:var(--accent);font-size:12px}.geometry-row{display:flex;gap:5px;margin-bottom:14px}.geometry-row button{font-size:10px;flex:1;padding:8px 5px}#geometry-tools label{font-size:11px}#crop-ratio{display:block;width:100%;margin-top:8px}#geometry-message{display:block;line-height:1.7}
+/* A fixed desktop viewport with independently scrolling tools prevents page tails. */
+@media(min-width:761px){
+ html,body{height:100%;overflow:hidden}body{height:100dvh;display:grid;grid-template-rows:72px minmax(0,1fr)}
+ header{height:72px}main{height:100%;min-height:0;overflow:hidden}
+ .workspace{height:100%;min-height:0;overflow:hidden}.canvas{min-height:0}
+ aside{height:100%;min-height:0;max-height:none;overflow-y:auto;padding-top:18px;padding-bottom:18px}
+ aside>*{flex-shrink:0}.photo-info{padding:16px 0}footer{min-height:42px}.view-tools{padding-top:10px}
+}
+.note{margin-top:12px;padding-top:12px}.engine{padding-top:4px}.panel-heading h2{margin-bottom:14px}
+.category{border-top:1px solid var(--border);padding:0;margin:0}
+.category>summary{cursor:pointer;padding:16px 0;font-size:13px;font-weight:600;user-select:none;color:var(--text)}
+.category .control-group{border:0;padding:2px 0 8px}.category fieldset{border:0!important;padding:4px 0!important;margin:0!important}
+.category fieldset>legend{display:none}.category label{margin-bottom:18px}.category>summary:focus-visible{outline:2px solid var(--accent)}
+input[type=range]::-webkit-slider-thumb{width:20px;height:15px;border-radius:5px}
+input[type=range]::-moz-range-thumb{width:18px;height:13px;border-radius:5px}
+.hue-range{background:linear-gradient(to right,#f55,#ff5,#5f5,#5ff,#55f,#f5f,#f55)!important}
+.tone-swatch-row{display:flex;gap:10px;align-items:center;margin:-5px 0 18px}#tone-swatch{width:28px;height:22px;border-radius:5px;border:1px solid #ffffff40}
+.curve-actions{display:flex;gap:10px;align-items:center;margin:-6px 0 16px}.curve-actions button,#auto-light{font-size:11px;padding:8px 10px}#auto-light{margin-bottom:20px}.curve-actions small{font-size:10px;line-height:1.6}
+#tone-curve{cursor:crosshair;height:180px;margin-bottom:14px}
+@media(max-width:760px){body{overflow-x:hidden}main{min-height:0}.workspace{height:auto}.canvas{height:55dvh;min-height:260px}.note{margin-top:12px}}

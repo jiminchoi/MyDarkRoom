@@ -14,12 +14,12 @@ export class MaskEditor {
       <fieldset id="mask-properties" disabled>
         <label>이름 <input id="mask-name" maxlength="60"></label>
         <div class="mask-row"><label class="check-label"><input id="mask-enabled" type="checkbox"> 사용</label><label class="check-label"><input id="mask-invert" type="checkbox"> 반전</label></div>
-        <label>마스크 불투명도 <input id="mask-opacity" type="range" min="0" max="1" step=".01"></label>
+        <label>마스크 불투명도 <input id="mask-opacity" value="1" type="range" min="0" max="1" step=".01"></label>
         <label id="mask-draw-label" class="check-label"><input id="mask-draw" type="checkbox"> 사진에서 그리기 (끄면 이동)</label>
         <div id="brush-properties"><label>브러시 크기 <input id="brush-radius" type="range" min=".002" max=".25" step=".002" value=".04"></label><label>경계 부드러움 <input id="brush-feather" type="range" min="0" max="1" step=".01" value=".6"></label><label class="check-label"><input id="brush-erase" type="checkbox"> 지우개</label></div>
-        <div id="color-properties"><label>선택할 색 <input id="mask-color" type="color" value="#ff0000"></label><button id="mask-pick">사진에서 색 찍기</button><label>색 허용 범위 <input id="mask-tolerance" type="range" min=".001" max="1" step=".001"></label></div>
-        <div id="luminance-properties"><label>휘도 하한 <input id="mask-low" type="range" min="0" max="1" step=".01"></label><label>휘도 상한 <input id="mask-high" type="range" min="0" max="1" step=".01"></label></div>
-        <label id="range-feather-label">범위 경계 부드러움 <input id="mask-feather" type="range" min="0" max="1" step=".01"></label>
+        <div id="color-properties"><label>선택할 색 <input id="mask-color" type="color" value="#ff0000"></label><button id="mask-pick">사진에서 색 찍기</button><label>색 허용 범위 <input id="mask-tolerance" value=".25" type="range" min=".001" max="1" step=".001"></label></div>
+        <div id="luminance-properties"><label>휘도 하한 <input id="mask-low" value=".2" type="range" min="0" max="1" step=".01"></label><label>휘도 상한 <input id="mask-high" value=".8" type="range" min="0" max="1" step=".01"></label></div>
+        <label id="range-feather-label">범위 경계 부드러움 <input id="mask-feather" value=".15" type="range" min="0" max="1" step=".01"></label>
         <div id="gradient-properties"><h3>거리별 농도</h3><canvas id="density-curve" width="256" height="100" aria-label="거리별 마스크 농도"></canvas><div id="density-controls"></div><button id="density-reset">농도 기본값</button><small id="density-help"></small></div>
         <div id="local-adjustments"><h3>이 마스크의 보정</h3></div>
       </fieldset><small id="mask-help">마스크를 추가해 사진 일부만 보정하세요. 최대 8개.</small></fieldset>`;
@@ -27,7 +27,7 @@ export class MaskEditor {
       const limit=key==="exposure" ? 3 : 100,step=key==="exposure" ? .01 : 1;
       const row=document.createElement("label");row.textContent=label;
       const out=document.createElement("output");out.id=`local-${key}-value`;row.append(out);
-      const input=document.createElement("input");Object.assign(input,{id:`local-${key}`,type:"range",min:-limit,max:limit,step,value:0});row.append(input);$("local-adjustments").append(row);
+      const input=document.createElement("input");Object.assign(input,{id:`local-${key}`,type:"range",min:-limit,max:limit,step,value:0,defaultValue:"0"});row.append(input);$("local-adjustments").append(row);
       input.oninput=()=>{const m=this.current();if (!m) return;m.adjustments[key]=Number(input.value);out.textContent=input.value;this.onChange(false);};
       input.onchange=()=>this.onChange(true);
     }
@@ -110,7 +110,7 @@ export class MaskEditor {
     if (!["brush","gradient","radial"].includes(m.kind)) $("mask-draw").checked=false;
     $("gradient-properties").hidden=!["gradient","radial"].includes(m.kind);
     if (["gradient","radial"].includes(m.kind)) {
-      const values=this.densities(m);for (let i=0;i<5;i++) $("density-"+i).value=values[i]*100;
+      const values=this.densities(m),base=this.densities({...m,density:null});for (let i=0;i<5;i++) {$("density-"+i).value=values[i]*100;$("density-"+i).defaultValue=base[i]*100;}
       $("density-help").textContent=m.kind==="radial" ? "거리 0%=중심, 100%=반경 경계. 바깥은 0%. 반전하면 외부를 보정합니다." : "거리 0%=시작점, 100%=끝점. 시작 전/끝 후에는 양 끝 농도가 유지됩니다.";
       this.drawDensity();
     }

@@ -6,6 +6,7 @@ import numpy as np
 import rawpy
 from PIL import Image, ImageCms
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from .curves import curve_lut
 from .masking import Mask, bake_masks
 from .geometry import Geometry,apply_geometry
 from .raw_support import compatible_develop
@@ -30,6 +31,7 @@ class Adjustments(BaseModel):
     grain_size: float = Field(default=1, ge=1, le=8)
     geometry: Geometry = Field(default_factory=Geometry)
     masks: list[Mask] = Field(default_factory=list, max_length=8)
+    curve_points: list[tuple[float,float]] | None = Field(default=None,min_length=2,max_length=32)
     curve_black: float = Field(default=0,ge=0,le=100)
     curve_shadow: float = Field(default=25,ge=0,le=100)
     curve_mid: float = Field(default=50,ge=0,le=100)
@@ -40,6 +42,10 @@ class Adjustments(BaseModel):
     def ordered_curve(self):
         points=[self.curve_black,self.curve_shadow,self.curve_mid,self.curve_light,self.curve_white]
         if points!=sorted(points):raise ValueError("Tone curve must be nondecreasing")
+        if self.curve_points is not None:
+            p=self.curve_points
+            if p[0][0]!=0 or p[-1][0]!=1 or any(not 0<=y<=1 for x,y in p) or any(p[i][0]-p[i-1][0]<.002 for i in range(1,len(p))):
+                raise ValueError("Invalid curve points")
         return self
 
 
@@ -97,8 +103,8 @@ def render(rgb: np.ndarray, settings: Adjustments, *, origin=(0, 0), pixel_scale
     gains = np.array([2 ** (0.45 * warmth + 0.15 * tint),
                       2 ** (-0.3 * tint),
                       2 ** (-0.45 * warmth + 0.15 * tint)], dtype=np.float32)
-    curve=np.array([settings.curve_black,settings.curve_shadow,settings.curve_mid,settings.curve_light,settings.curve_white],dtype=np.float32)/100
-    identity=np.array_equal(curve,np.array([0,.25,.5,.75,1],dtype=np.float32))
+    curve=curve_lut(settings)
+    identity=np.max(np.abs(curve-np.linspace(0,1,256)))<1e-7
     for row in range(0, rgb.shape[0], 128):
         strip=bake_masks(rgb[row:row+128],settings.masks,origin=(origin[0],origin[1]+row*pixel_scale[1]),pixel_scale=pixel_scale,full_size=full_size)
         x = strip.astype(np.float32) / 65535
@@ -113,8 +119,8 @@ def render(rgb: np.ndarray, settings: Adjustments, *, origin=(0, 0), pixel_scale
         x = np.where(x <= 0.0031308, x * 12.92, 1.055 * np.power(x, 1 / 2.4) - 0.055)
         x = (x - 0.5) * (2 ** (settings.contrast / 100)) + 0.5
         if not identity:
-            position=np.clip(x,0,1)*4
-            index=np.minimum(position.astype(np.int32),3)
+            position=np.clip(x,0,1)*255
+            index=np.minimum(position.astype(np.int32),254)
             fraction=position-index.astype(np.float32)
             x=curve[index]*(1-fraction)+curve[index+1]*fraction
         gray = x @ np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)

@@ -37,8 +37,8 @@ def workflow(browser,args,cpu=False):
     exposure=page.locator("#exposure");exposure.focus();page.keyboard.press("ArrowRight")
     assert exposure.input_value()=="0.01"
     page.keyboard.press("ArrowLeft");assert exposure.input_value()=="0"
-    page.locator("#curve_mid").fill("65");page.locator("#curve_mid").dispatch_event("input");page.locator("#curve_mid").dispatch_event("change")
-    page.locator("#curve_light").fill("85");page.locator("#curve_light").dispatch_event("input");page.locator("#curve_light").dispatch_event("change")
+    page.locator("#curve_mid").evaluate("e=>e.value=65");page.locator("#curve_mid").dispatch_event("input");page.locator("#curve_mid").dispatch_event("change")
+    page.locator("#curve_light").evaluate("e=>e.value=85");page.locator("#curve_light").dispatch_event("input");page.locator("#curve_light").dispatch_event("change")
     page.locator("#undo").click();assert page.locator("#curve_light").input_value()=="75"
     page.locator("#redo").click();assert page.locator("#curve_light").input_value()=="85"
     # The real FileSystemDirectoryHandle/writer runs in OPFS; only the native chooser is stubbed.

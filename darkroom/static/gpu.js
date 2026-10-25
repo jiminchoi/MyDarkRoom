@@ -1,3 +1,4 @@
+import {curveLut} from "./curves.js";
 // Linear 16-bit RGB textures stay on the GPU throughout slider/compare changes.
 const vertex = `#version 300 es
 in vec2 position;
@@ -18,12 +19,12 @@ uniform vec3 color;
 uniform bool monochrome;
 uniform vec3 mixer, tone;
 uniform float toneAmount, grain, grainSize;
-uniform float masterCurve[5];
+uniform vec4 masterCurve[64];
 uniform bool curveEnabled;
 out vec4 result;
 float curveValue(float value) {
-  float p=clamp(value,0.,1.)*4.;int i=min(int(p),3);
-  return mix(masterCurve[i],masterCurve[i+1],p-float(i));
+  float p=clamp(value,0.,1.)*255.;int i=min(int(p),254);
+  return mix(masterCurve[i/4][i%4],masterCurve[(i+1)/4][(i+1)%4],p-float(i));
 }
 vec3 sample16(usampler2D tex, vec2 uv) {
   ivec2 size = textureSize(tex, 0);
@@ -155,8 +156,8 @@ export class GpuRenderer {
     gl.uniform1i(u.histogram,histogram); gl.uniform1f(u.splitPosition,splitPosition);
     gl.uniform4f(u.light,settings.exposure,settings.contrast,settings.highlights,settings.shadows);
     gl.uniform3f(u.color,settings.temperature,settings.tint,settings.saturation);
-    gl.uniform1fv(u.masterCurve,[settings.curve_black ?? 0,settings.curve_shadow ?? 25,settings.curve_mid ?? 50,settings.curve_light ?? 75,settings.curve_white ?? 100].map(v=>v/100));
-    gl.uniform1i(u.curveEnabled,[settings.curve_black ?? 0,settings.curve_shadow ?? 25,settings.curve_mid ?? 50,settings.curve_light ?? 75,settings.curve_white ?? 100].some((v,i)=>v!==i*25));
+    const lut=curveLut(settings);gl.uniform4fv(u.masterCurve,lut);
+    gl.uniform1i(u.curveEnabled,lut.some((v,i)=>Math.abs(v-i/255)>1e-7));
     gl.uniform1i(u.monochrome,Boolean(settings.monochrome));
     const weights=[settings.mix_red ?? 30,settings.mix_green ?? 59,settings.mix_blue ?? 11];
     const total=weights.reduce((a,b)=>a+b,0);

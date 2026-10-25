@@ -26,7 +26,9 @@ def shader_checks(page):
              {"grain":80,"grain_size":2,"tone_hue":35,"tone_amount":70},
              {"monochrome":True,"grain":100,"grain_size":1},
              {"curve_black":5,"curve_shadow":18,"curve_mid":60,"curve_light":85,"curve_white":95,"saturation":20},
-             {"curve_mid":65,"curve_light":85,"monochrome":True,"grain":35}]
+             {"curve_mid":65,"curve_light":85,"monochrome":True,"grain":35},
+             {"curve_points":[[0,.03],[.1,.05],[.2,.15],[.3,.26],[.4,.43],[.5,.62],[.6,.73],[.7,.8],[.8,.85],[.9,.92],[1,.98]],"saturation":15},
+             {"curve_points":[[0,0],[.3,.7],[.6,.4],[1,1]],"monochrome":True}]
     for case in cases:
         settings = Adjustments(**case)
         result = page.evaluate("""async ({rgb,settings}) => {

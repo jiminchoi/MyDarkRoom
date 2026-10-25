@@ -36,17 +36,41 @@ def test_auto_level_and_no_line_failure():
     with pytest.raises(ValueError):estimate_geometry(Image.new('RGB',(300,200)),'upright')
 
 
-def test_upright_corrects_converging_verticals():
+def facade():
+    image=Image.new('RGB',(1000,800),'#202020');draw=ImageDraw.Draw(image)
+    for x in [80,300,550,800,950]:draw.line((x,20,x,780),fill='white',width=3)
+    for y in [50,270,510,750]:draw.line((20,y,980,y),fill='white',width=3)
+    return image
+
+
+@pytest.mark.parametrize('mode',['vertical','upright'])
+def test_upright_corrects_mild_perspective_and_preserves_ratio(mode):
+    image=facade();original_matrix=forward_matrix(image.size,Geometry(vertical=.15,rotation=2))
+    distorted=apply_geometry(image,Geometry(vertical=.15,rotation=2))
+    result=estimate_geometry(distorted,mode);g=Geometry(**result['geometry'])
+    combined=forward_matrix(distorted.size,g)@original_matrix
+    for x in [300,800]:
+        a=combined@np.array([x,100,1.]);b=combined@np.array([x,700,1.]);a/=a[2];b/=b[2]
+        assert abs(a[0]-b[0])<4
+    assert g.crop[2]==pytest.approx(g.crop[3]) and g.crop[2]<1
+    # The entire accepted crop must come from real source pixels, including corners.
+    x,y,w,h=g.crop;inverse=np.linalg.inv(forward_matrix(distorted.size,g))
+    for u,v in [(x,y),(x+w,y),(x+w,y+h),(x,y+h)]:
+        point=inverse@np.array([u*1000,v*800,1]);point/=point[2]
+        assert 1<=point[0]<=999 and 1<=point[1]<=799
+
+
+def test_ambiguous_and_excessive_perspective_is_rejected():
+    # The old implementation accepted these unsupported, strongly converging lines.
     image=Image.new('RGB',(800,600),'#202020');draw=ImageDraw.Draw(image)
-    # All columns share a vanishing point above the frame.
-    for x in [80,200,320,480,600,720]:
-        draw.line((400+(x-400)*.5,40,x,570),fill='white',width=3)
-    result=estimate_geometry(image,'upright')
-    g=Geometry(**result['geometry']);matrix=forward_matrix(image.size,g)
-    assert g.upright!=[1,0,0,0,1,0,0,0,1]
-    for x in [200,600]:
-        a=matrix@np.array([400+(x-400)*.5,40,1.]);b=matrix@np.array([x,570,1.]);a/=a[2];b/=b[2]
-        assert abs(a[0]-b[0])<12
+    for x in [80,200,320,480,600,720]:draw.line((400+(x-400)*.5,40,x,570),fill='white',width=3)
+    with pytest.raises(ValueError):estimate_geometry(image,'upright')
+    with pytest.raises(ValueError):estimate_geometry(apply_geometry(facade(),Geometry(vertical=.6)),'upright')
+    # One line's two edges and scattered diagonal natural shapes aren't evidence.
+    image=Image.new('RGB',(800,600));draw=ImageDraw.Draw(image)
+    draw.line((10,200,790,215),fill='white',width=6)
+    draw.line((20,500,210,240,460,430,730,180),fill='white',width=3)
+    with pytest.raises(ValueError):estimate_geometry(image,'level')
 
 
 def test_bad_geometry_rejected():

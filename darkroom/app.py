@@ -182,7 +182,7 @@ def index():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "rawpy": rawpy.__version__, "libraw": ".".join(map(str, rawpy.libraw_version)),"dng_converter":bool(converter_path()),"app_version":"0.6.0"}
+    return {"status": "ok", "rawpy": rawpy.__version__, "libraw": ".".join(map(str, rawpy.libraw_version)),"dng_converter":bool(converter_path()),"app_version":"0.7.0"}
 
 
 @app.post("/api/photos")
@@ -286,7 +286,7 @@ def detail_cpu(photo_id: str, settings: Adjustments, request: Request,
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 @app.post("/api/photos/{photo_id}/auto-geometry")
-def auto_geometry(photo_id:str,request:Request,mode:str=Query(pattern="^(level|upright)$")):
+def auto_geometry(photo_id:str,request:Request,mode:str=Query(pattern="^(level|vertical|upright)$")):
     studio=request.app.state.studio
     with studio.lock:
         photo=studio.get(photo_id)
@@ -295,3 +295,23 @@ def auto_geometry(photo_id:str,request:Request,mode:str=Query(pattern="^(level|u
         except ValueError as exc:raise HTTPException(422,str(exc)) from exc
         except ImportError as exc:raise HTTPException(503,"자동 분석 모듈을 불러오지 못했습니다. start_windows.cmd로 패키지를 설치한 뒤 다시 실행하세요.") from exc
         finally:image.close()
+
+@app.post("/api/photos/{photo_id}/auto-light")
+def auto_light(photo_id:str,request:Request):
+    """Conservative source-based recommendation, never changes color controls."""
+    studio=request.app.state.studio
+    with studio.lock:
+        rgb=studio.get(photo_id).preview[::4,::4].astype(np.float32)/65535
+        luma=rgb@np.array([.2126,.7152,.0722],dtype=np.float32)
+        low,median,high=np.percentile(luma,[5,50,99.5])
+        if high<1e-5:
+            return {"adjustments":{"exposure":0,"contrast":0,"highlights":0,"shadows":0}}
+        exposure=float(np.clip(np.log2(.18/max(median,.001))*.55,-1,1))
+        # Preserve low-key scenes and protect existing highlights.
+        if median<.015:exposure=min(exposure,.35)
+        exposure=min(exposure,max(0,float(np.log2(.95/max(high,.001))))) if exposure>0 else exposure
+        shifted_high=high*2**exposure
+        highlights=float(np.clip((.8-shifted_high)*90,-45,0))
+        shadows=float(np.clip((.06-low*2**exposure)*250,0,25)) if high>.12 else 0
+        contrast=float(np.clip((.5-(high-low))*12,-8,8))
+        return {"adjustments":{"exposure":round(exposure,2),"contrast":round(contrast),"highlights":round(highlights),"shadows":round(shadows)}}
