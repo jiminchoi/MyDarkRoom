@@ -58,6 +58,7 @@ class InstanceLock:
             kernel.CloseHandle.argtypes=[wintypes.HANDLE]
             self.kernel=kernel
             digest=hashlib.sha256(str(self.directory.resolve()).casefold().encode()).hexdigest()[:24]
+            ctypes.set_last_error(0)
             handle=kernel.CreateMutexW(None,False,"Local\\MyDarkRoom-"+digest)
             if not handle:raise ctypes.WinError(ctypes.get_last_error())
             if ctypes.get_last_error()==183:

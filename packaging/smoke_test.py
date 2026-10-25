@@ -56,6 +56,9 @@ def windows_visible_window(pid):
     from ctypes import wintypes
     user=ctypes.WinDLL("user32",use_last_error=True);found=[]
     callback=ctypes.WINFUNCTYPE(wintypes.BOOL,wintypes.HWND,wintypes.LPARAM)
+    user.GetWindowThreadProcessId.argtypes=[wintypes.HWND,ctypes.POINTER(wintypes.DWORD)]
+    user.IsWindowVisible.argtypes=[wintypes.HWND]
+    user.EnumWindows.argtypes=[callback,wintypes.LPARAM]
     def visit(window,_):
         owner=wintypes.DWORD();user.GetWindowThreadProcessId(window,ctypes.byref(owner))
         if owner.value==pid and user.IsWindowVisible(window):found.append(window)
@@ -147,7 +150,7 @@ def run(args):
                         except subprocess.TimeoutExpired:process.kill()
                 if args.report:
                     args.report.parent.mkdir(parents=True,exist_ok=True)
-                    shutil.copytree(profile/"logs",args.report.parent/"smoke-logs",dirs_exist_ok=True)
+                    if (profile/"logs").is_dir():shutil.copytree(profile/"logs",args.report.parent/"smoke-logs",dirs_exist_ok=True)
         report['passed']=True
         if args.report:args.report.write_text(json.dumps(report,indent=2),encoding="utf-8")
     print(json.dumps(report,indent=2),flush=True)

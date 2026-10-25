@@ -45,11 +45,9 @@ jobs:
         run: |
           $version = python -c "from darkroom.version import VERSION;print(VERSION)"
           if ('${{ github.ref_type }}' -eq 'tag' -and '${{ github.ref_name }}' -ne "v$version") { throw 'Tag/version mismatch' }
-          $zip = "MyDarkRoom-$version-Windows-x64.zip"
           Copy-Item release/windows-smoke.json dist/MyDarkRoom/BUILD-VERIFICATION.json
-          Compress-Archive -Path dist/MyDarkRoom -DestinationPath "release/$zip" -CompressionLevel Optimal
-          $hash = (Get-FileHash "release/$zip" -Algorithm SHA256).Hash.ToLower()
-          "$hash  $zip" | Set-Content -Encoding ascii release/SHA256SUMS.txt
+          python packaging/package_windows.py
+          if ($LASTEXITCODE) { throw 'ZIP contents/checksum verification failed.' }
       - name: Save verified distribution
         uses: actions/upload-artifact@v4
         with:

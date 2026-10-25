@@ -1,6 +1,6 @@
 # MyDarkRoom
 
-## Windows EXE (0.11.0)
+## Windows EXE (0.11.1)
 
 [GitHub Releases](https://github.com/jiminchoi/MyDarkRoom/releases)의 **Windows-x64.zip** 전체를 새 폴더에 풀고 `MyDarkRoom.exe`를 실행하세요. Python 설치/초기 pip 설치가 필요 없습니다. `_internal` 폴더도 EXE 옆에 함께 보관하세요. 기존 소스 실행 창을 먼저 종료하면 기존 브라우저 포트와 프리셋을 이어 쓰기 쉽습니다.
 
