@@ -2,6 +2,8 @@
 
 ## Windows EXE (0.11.1)
 
+**[Windows x64 EXE 다운로드](https://github.com/jiminchoi/MyDarkRoom/releases/download/v0.11.1/MyDarkRoom-0.11.1-Windows-x64.zip)** · [실제 Windows 검증 결과](https://github.com/jiminchoi/MyDarkRoom/releases/download/v0.11.1/windows-smoke.json)
+
 [GitHub Releases](https://github.com/jiminchoi/MyDarkRoom/releases)의 **Windows-x64.zip** 전체를 새 폴더에 풀고 `MyDarkRoom.exe`를 실행하세요. Python 설치/초기 pip 설치가 필요 없습니다. `_internal` 폴더도 EXE 옆에 함께 보관하세요. 기존 소스 실행 창을 먼저 종료하면 기존 브라우저 포트와 프리셋을 이어 쓰기 쉽습니다.
 
 - 기동 때마다 대용량 실행 파일을 임시 폴더에 풀지 않는 **폴더형 EXE**입니다. 화면은 기존 Edge/Chrome, RAW·GPU·부분 확대·JPEG 엔진은 동일합니다. 별도 웹뷰/브라우저 엔진이나 추가 편집 서버 프로세스를 띄우지 않습니다.
@@ -11,7 +13,7 @@
 
 Windows 빌드는 `.github/workflows/windows-release.yml`에서 수행합니다. 버전 태그를 푸시하면 엔진 테스트 → PyInstaller 폴더 빌드 → **Python 없는 PATH/한글 경로/실제 NEF/마스크·커브·부분 확대/JPEG DPI·ICC/중복 실행/네이티브 창/종료·캐시 정리/포트 충돌 검사**를 통과한 파일만 ZIP과 SHA256으로 Releases에 게시합니다. `BUILD-VERIFICATION.json`에는 해당 빌드의 실제 검증 결과가 포함됩니다.
 
-직접 빌드하려면 Windows x64 Python 3.12에서 `powershell -ExecutionPolicy Bypass -File packaging/build_windows.ps1`을 실행하세요. 결과는 `dist/MyDarkRoom/MyDarkRoom.exe`입니다. 검증 명령은 `python packaging/smoke_test.py --bundle dist/MyDarkRoom --nef C:\Photos\sample.NEF --gui --report release/windows-smoke.json`이며 검증용 NEF는 고정 해시의 공개 테스트 샘플을 사용합니다. 일반 사용자 사진 경로를 해당 스크립트에 넣지 마세요.
+직접 빌드하려면 Windows x64 Python 3.12에서 `powershell -ExecutionPolicy Bypass -File packaging/build_windows.ps1`을 실행하세요. 결과는 `dist/MyDarkRoom/MyDarkRoom.exe`입니다. 검증 명령은 `python packaging/smoke_test.py --bundle dist/MyDarkRoom --nef "$env:TEMP\mydarkroom-smoke.NEF" --gui --report release/windows-smoke.json`이며 검증용 NEF는 고정 해시의 공개 테스트 샘플을 사용합니다. 일반 사용자 사진 경로를 해당 스크립트에 넣지 마세요.
 
 ## 0.10.0: 마스크별 선예도·텍스처·명료도·디헤이즈
 

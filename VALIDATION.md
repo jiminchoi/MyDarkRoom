@@ -3,7 +3,9 @@
 ## 0.11.1: Windows 배포 실행기
 
 - Linux에서 실제 NEF를 포함한 **75개 단위/API 테스트 통과**. 새 실행기의 루프백 포트 충돌 처리, 프로필별 단일 인스턴스 잠금, 한글/공백 경로의 상태 파일, 실제 별도 프로세스 기동·중복 실행·인증된 종료·임시 캐시/상태 정리를 확인했습니다. 인증 없는 종료와 외부 Origin의 종료는 거부합니다. Python 구문 검사 및 고정 의존성의 Windows x64 휠 해석/다운로드도 통과했습니다.
-- 실제 Windows EXE 검사는 GitHub Actions의 Windows 2022/x64에서 수행합니다. 빌드가 성공한 것만으로 배포하지 않으며 frozen EXE와 네이티브 Tk 창의 별도 smoke 검사가 성공해야 릴리스 작업으로 넘어갑니다. 실제 결과는 릴리스의 `windows-smoke.json`과 배포 폴더의 `BUILD-VERIFICATION.json`에 기록합니다. 이 항목은 Windows 검사가 아직 실행되기 전의 구성 설명이며 통과를 미리 주장하지 않습니다.
+- **실제 Windows 검증/배포 완료:** [v0.11.1 빌드](https://github.com/jiminchoi/MyDarkRoom/actions/runs/40172059775)가 Windows Server 2022/x64, Python 3.12.10에서 엔진 테스트와 frozen EXE smoke 검사를 통과했습니다. 결과 ZIP은 [GitHub Release](https://github.com/jiminchoi/MyDarkRoom/releases/tag/v0.11.1)에 게시했으며 실제 체크 16개의 결과는 `windows-smoke.json` 및 ZIP 안 `BUILD-VERIFICATION.json`에 있습니다.
+- Python 없는 PATH, 한글/공백의 설치·프로필 경로, 실제 NEF와 LibRaw DLL, 4MP, 전역/마스크 보정·커브, 크롭/원근 후 원본 영역, JPEG 2000px·240 DPI·ICC, 중복 실행, 인증 없는/외부 Origin 종료 거부, 원본 해시 유지, Windows mmap/캐시 종료 정리, 네이티브 Tk 창, 재기동 시 같은 포트, 포트 충돌 회피, 설치 폴더에 파일 쓰기 없음이 통과했습니다. CI에서 준비 완료까지 첫 기동 1.797초, 재기동 1.812초를 측정했습니다. 해당 러너의 API 준비 시간이며 사용자 PC의 첫 사진 현상 시간/GPU FPS를 보장하지 않습니다.
+- 압축 파일의 모든 파일을 빌드 폴더와 SHA256으로 대조했고, 게시된 ZIP 응답 HTTP 200과 파일 크기 **81,211,182바이트**를 확인했습니다. ZIP SHA256: `df55f03597b2cf448a11b14e5d3d4da1cb55b8daedb4096ca7b8a0f332b229b9`. Windows 하드웨어 GPU/각 드라이버와 최신 니콘 기종 전체를 검사한 것은 아닙니다.
 
 ## 0.10.0: 마스크별 공간 보정과 캐시
 
