@@ -12,6 +12,7 @@ import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import time
+import traceback
 import urllib.request
 
 import httpx
@@ -155,4 +156,14 @@ def run(args):
 if __name__=="__main__":
     parser=argparse.ArgumentParser();parser.add_argument('--bundle',type=Path,default=ROOT/'dist/MyDarkRoom');parser.add_argument('--nef',type=Path,required=True);parser.add_argument('--gui',action='store_true');parser.add_argument('--report',type=Path);parser.add_argument('--download-only',action='store_true');args=parser.parse_args()
     if args.download_only:sample(args.nef)
-    else:run(args)
+    else:
+        try:run(args)
+        except BaseException:
+            def annotate(title,value):
+                value=value[-18000:].replace('%','%25').replace('\r','%0D').replace('\n','%0A')
+                print(f'::error title={title}::{value}',flush=True)
+            annotate('Frozen EXE smoke failure',traceback.format_exc())
+            if args.report:
+                for log in (args.report.parent/'smoke-logs').glob('*.log'):
+                    annotate('Frozen EXE runtime log',log.read_text(encoding='utf-8',errors='replace'))
+            raise

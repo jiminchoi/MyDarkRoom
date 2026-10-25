@@ -9,8 +9,14 @@ if (-not $SkipInstall) {
 }
 python -m pip check
 if ($LASTEXITCODE) { throw 'Dependency verification failed.' }
-python -m PyInstaller --noconfirm --clean packaging/MyDarkRoom.spec
-if ($LASTEXITCODE) { throw 'EXE build failed.' }
+New-Item -ItemType Directory -Force release | Out-Null
+python -m PyInstaller --noconfirm --clean packaging/MyDarkRoom.spec 2>&1 | Tee-Object -FilePath release/pyinstaller.log
+if ($LASTEXITCODE) {
+    $tail = (Get-Content release/pyinstaller.log -Tail 65) -join "`n"
+    $encoded = $tail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+    Write-Output "::error title=PyInstaller packaging error::$encoded"
+    throw 'EXE build failed. See the packaging error annotation.'
+}
 Copy-Item packaging/Windows-README.txt dist/MyDarkRoom/README-Windows.txt
 python packaging/collect_notices.py dist/MyDarkRoom
 if ($LASTEXITCODE) { throw 'License collection failed.' }
