@@ -1,5 +1,11 @@
 # 검증 기록
 
+## 0.12.1: Internet Zone 표시 DLL 기동 회귀 검사
+
+- 사용자 로그의 `Failed to resolve Python.Runtime.Loader.Initialize`와 동일한 오류를 Windows에서 재현했습니다. `Python.Runtime.dll`과 WebView2 Core/WinForms DLL에 `Zone.Identifier`의 `ZoneId=3`을 기록하고 앱 설정 파일을 잠시 제외했을 때 해당 오류로 기동 실패함을 확인했습니다. 설정 파일 복원 후에는 표시를 지우지 않고 .NET/WebView2 로딩과 전체 EXE 검사를 통과했습니다.
+- **88개 단위/API 테스트**와 **27개 Windows smoke 체크**가 통과했습니다. [배포 실행 기록](https://github.com/jiminchoi/MyDarkRoom/actions/runs/40185730207), [검증 JSON](https://github.com/jiminchoi/MyDarkRoom/releases/download/v0.12.1/windows-smoke.json). 마지막 보고서의 `assembly_zone`은 3이며, SDK·CLR DLL은 그대로 유지하고 EXE 옆 `MyDarkRoom.exe.config`를 추가했습니다. .NET 버전/설정 파일 누락 안내와 런타임 진단 로그도 확인했습니다.
+- 공개 ZIP은 HTTP 200, **79,452,003바이트**이며 SHA256은 `aaaccdaedac1d9eaededaaafe55abf815e1e1adfdc7c5b514ffcee8adaeb3a01`입니다. 이 검사는 업로드된 로그의 PC를 원격 검사한 것이 아니라, 동일한 예외가 발생하는 다운로드 표시 조건을 재현한 것입니다. 프로그램 전체 동작과 모든 Windows 환경에 대한 무오류 보장은 아닙니다.
+
 ## 0.12.0: 내장 WebView2·네이티브 저장
 
 - Linux에서 실제 NEF를 포함한 **85개 단위/API 테스트 통과**. 네이티브 출력 이름/범위, 사용자 선택 폴더 토큰, 같은 이름 보존, 저장 취소, 저장 실패 시 기존 파일 보존, 저장 승인 후 임시 파일 교체, 다른 출처의 저장 거부, 저장 중 종료 대기를 추가 확인했습니다.

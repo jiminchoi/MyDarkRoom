@@ -1,3 +1,5 @@
+0.12.1은 `Failed to resolve Python.Runtime.Loader.Initialize`로 자체 창이 시작되지 않는 경우를 수정했습니다. 다운로드된 관리 DLL의 Windows Internet Zone 표시를 유지한 상태에서 실행할 수 있도록 앱 전용 .NET 설정을 추가했습니다. **EXE 옆 `MyDarkRoom.exe.config`도 함께 보관**하세요. 동일 오류 재현과 수정 후 전체 Windows 검사를 통과했습니다.
+
 자체 편집 창을 사용하는 Windows 10/11 x64용 MyDarkRoom입니다.
 
 1. 아래 Windows-x64.zip 전체를 새 폴더에 압축 해제하세요.

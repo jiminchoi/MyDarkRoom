@@ -1,5 +1,13 @@
 # MyDarkRoom
 
+## 0.12.1: 다운로드한 DLL의 자체 창 기동 오류 수정
+
+**[수정된 Windows EXE 다운로드](https://github.com/jiminchoi/MyDarkRoom/releases/download/v0.12.1/MyDarkRoom-0.12.1-Windows-x64.zip)** · [Windows 검증 보고서](https://github.com/jiminchoi/MyDarkRoom/releases/download/v0.12.1/windows-smoke.json)
+
+- `Failed to resolve Python.Runtime.Loader.Initialize`로 자체 창이 시작되지 않는 경우를 수정했습니다. Windows Internet Zone 표시(ZoneId=3)가 붙은 `Python.Runtime.dll`과 WebView2 관리 DLL의 로딩을 지원하는 **앱 전용 .NET 호스트 설정**을 추가했습니다. 표시를 지우지 않은 상태로 실행합니다.
+- 새 ZIP 전체를 새 폴더에 압축 해제하고 **`MyDarkRoom.exe`, `MyDarkRoom.exe.config`, `_internal` 폴더**를 함께 보관하세요. 설정 파일이 누락되거나 .NET Framework 버전이 부족하면 구체적인 안내를 표시합니다. 내부 런타임 진단도 로그에 남깁니다.
+- Windows 검사에서는 설정 파일 없이 다운로드 표시가 붙은 DLL의 동일 오류를 재현하고, 설정 파일을 복원한 뒤 표시가 남은 상태에서 CLR/WebView2 기동과 기존 NEF·GPU·JPEG·종료 검사를 다시 실행합니다. 보정 엔진과 프리셋/마스크 상태는 유지합니다.
+
 ## 0.12.0: 자체 편집 창·Windows 저장·패널 초기 상태
 
 **[자체 창 Windows EXE 다운로드](https://github.com/jiminchoi/MyDarkRoom/releases/download/v0.12.0/MyDarkRoom-0.12.0-Windows-x64.zip)** · [Windows 검증 보고서](https://github.com/jiminchoi/MyDarkRoom/releases/download/v0.12.0/windows-smoke.json)
