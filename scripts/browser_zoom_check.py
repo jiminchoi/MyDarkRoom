@@ -82,7 +82,7 @@ def check(browser,args,cpu=False):
         assert max(image.size)==2000 and abs(image.width-image.height)<=1
     # Painting after a cropped 200% pan maps back to the visible source content.
     zoom(200);detail();v=view();box=page.locator('#canvas').bounding_box()
-    with page.expect_request(lambda r:('/masked-pixels' in r.url or r.url.endswith('/preview')) and r.method=='POST' and r.post_data_json.get('masks') and r.post_data_json['masks'][0]['strokes']) as painted:
+    with page.expect_request(lambda r:('/masked-pixels' in r.url or '/mask-overlay?' in r.url or r.url.endswith('/preview')) and r.method=='POST' and r.post_data_json.get('masks') and r.post_data_json['masks'][0]['strokes']) as painted:
         page.mouse.click(box['x']+box['width']/2,box['y']+box['height']/2)
     stroke=painted.value.post_data_json['masks'][0]['strokes'][0]
     cfg=page.evaluate("""async({size,g})=>{const {gpuGeometry}=await import('/static/geometry-math.js');return gpuGeometry(size,g)}""",{'size':[photo['width'],photo['height']],'g':state['geometry']})

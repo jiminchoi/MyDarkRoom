@@ -21,6 +21,10 @@ uniform usampler2D structureSource,structureDetail;
 uniform sampler2D maskOverlay;
 uniform bool hasStructure,hasStructureDetail,showOverlay;
 uniform vec3 structureAmount;
+uniform sampler2D localWeights0,localWeights1,localDetail0,localDetail1;
+uniform usampler2D sharpSource,sharpDetail;
+uniform bool hasLocal,hasLocalDetail,hasSharp,hasSharpDetail;
+uniform vec4 localAmount[8];
 uniform vec4 light;
 uniform vec3 color;
 uniform bool monochrome;
@@ -49,14 +53,16 @@ vec4 sampleFields(usampler2D tex,vec2 uv){
  vec4 c01=vec4(texelFetch(tex,clamp(a+ivec2(0,1),ivec2(0),size-1),0)),c11=vec4(texelFetch(tex,clamp(a+ivec2(1,1),ivec2(0),size-1),0));
  return mix(mix(c00,c10,f.x),mix(c01,c11,f.x),f.y)/65535.;
 }
-vec3 spatial(vec3 x,vec4 field){
+vec3 spatial(vec3 x,vec4 field,vec4 amount,float sharp){
  float lum=dot(x,vec3(.2126,.7152,.0722)),fine=field.y-.5,broad=field.z-.5;
  float gate=clamp((abs(fine)-.004)/.016,0.,1.);gate=gate*gate*(3.-2.*gate);
  float middle=4.*clamp(lum,0.,1.)*(1.-clamp(lum,0.,1.));
- float delta=(structureAmount.y/100.*.55*clamp(broad,-.10,.10)+structureAmount.z/100.*.8*clamp(fine,-.05,.05)*gate)*middle;
- float target=lum+delta*clamp(lum/max(field.x,.04),.25,2.),amount=structureAmount.x/100.;
- if(amount>0.){float v=clamp(field.w,0.,.75)*amount*.55;target=max((target-v)/(1.-v),target*.55);}
- else if(amount<0.)target=target+(1.-target)*(-amount)*.22;
+ float delta=(amount.y/100.*.55*clamp(broad,-.10,.10)+amount.z/100.*.8*clamp(fine,-.05,.05)*gate)*middle;
+ float sg=clamp((abs(sharp)-.002)/.010,0.,1.);sg=sg*sg*(3.-2.*sg);
+ delta+=amount.w/100.*.65*clamp(sharp,-.04,.04)*sg*middle;
+ float target=lum+delta*clamp(lum/max(field.x,.04),.25,2.),haze=amount.x/100.;
+ if(haze>0.){float v=clamp(field.w,0.,.75)*haze*.55;target=max((target-v)/(1.-v),target*.55);}
+ else if(haze<0.)target=target+(1.-target)*(-haze)*.22;
  float gain=clamp(target/max(lum,.01),.5,2.);return x*gain+max(target-lum*gain,0.);
 }
 void main() {
@@ -80,6 +86,19 @@ void main() {
     x = sample16(detail, dp/detailSpan);
     if (hasMaskedDetail && !original) x=sample16(maskedDetail, dp/detailSpan);
   }
+  // Local spatial controls run once after local color, before global adjustments.
+  if(!original&&hasLocal&&hasStructure){
+    vec4 a=useDetail&&hasLocalDetail?texture(localDetail0,dp/detailSpan):texture(localWeights0,p/fullSize);
+    vec4 b=useDetail&&hasLocalDetail?texture(localDetail1,dp/detailSpan):texture(localWeights1,p/fullSize);
+    vec4 amount=clamp(a.x*localAmount[0]+a.y*localAmount[1]+a.z*localAmount[2]+a.w*localAmount[3]+b.x*localAmount[4]+b.y*localAmount[5]+b.z*localAmount[6]+b.w*localAmount[7],-100.,100.);
+    if(any(notEqual(amount,vec4(0)))){
+      vec4 f=useDetail&&hasStructureDetail?sampleFields(structureDetail,dp/detailSpan):sampleFields(structureSource,p/fullSize);
+      float sharp=hasSharp?(useDetail&&hasSharpDetail?sampleFields(sharpDetail,dp/detailSpan).r:sampleFields(sharpSource,p/fullSize).r)-.5:0.;
+      x=clamp(x,0.,1.);x=mix(1.055*pow(x,vec3(1./2.4))-.055,12.92*x,lessThanEqual(x,vec3(.0031308)));
+      x=clamp(spatial(x,f,amount,sharp),0.,1.);
+      x=mix(pow((x+.055)/1.055,vec3(2.4)),x/12.92,lessThanEqual(x,vec3(.04045)));
+    }
+  }
   vec4 l = original ? vec4(0) : light;
   vec3 c = original ? vec3(0) : color;
   float warmth = c.x/100., tint = c.y/100.;
@@ -90,7 +109,7 @@ void main() {
   x *= exp2(l.w/100.*shadow+l.z/100.*highlight);
   x = clamp(x,0.,1.);
   x = mix(1.055*pow(x,vec3(1./2.4))-.055,12.92*x,lessThanEqual(x,vec3(.0031308)));
-  if(!original&&hasStructure&&any(notEqual(structureAmount,vec3(0)))){vec4 f=useDetail&&hasStructureDetail?sampleFields(structureDetail,dp/detailSpan):sampleFields(structureSource,p/fullSize);x=spatial(x,f);}
+  if(!original&&hasStructure&&any(notEqual(structureAmount,vec3(0)))){vec4 f=useDetail&&hasStructureDetail?sampleFields(structureDetail,dp/detailSpan):sampleFields(structureSource,p/fullSize);x=spatial(x,f,vec4(structureAmount,0.),0.);}
   x = (x-.5)*exp2(l.y/100.)+.5;
   if (!original && curveEnabled) x=vec3(curveValue(x.r),curveValue(x.g),curveValue(x.b));
   lum = dot(x,vec3(.2126,.7152,.0722));
@@ -136,9 +155,12 @@ export class GpuRenderer {
     const position = gl.getAttribLocation(this.program, "position");
     gl.enableVertexAttribArray(position); gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
     this.locations = {};
-    for (const name of ["source","detail","outputSize","fullSize","offset","origin","detailOrigin","detailSpan","scale","splitPosition","hasDetail","before","split","histogram","light","color","monochrome","mixer","tone","toneAmount","grain","grainSize","maskedSource","maskedDetail","hasMaskedSource","hasMaskedDetail","geometryEnabled","inverseGeometry","geometrySize","cropOrigin","structureSource","structureDetail","maskOverlay","hasStructure","hasStructureDetail","showOverlay","structureAmount"]) this.locations[name] = gl.getUniformLocation(this.program, name);
+    for (const name of ["source","detail","outputSize","fullSize","offset","origin","detailOrigin","detailSpan","scale","splitPosition","hasDetail","before","split","histogram","light","color","monochrome","mixer","tone","toneAmount","grain","grainSize","maskedSource","maskedDetail","hasMaskedSource","hasMaskedDetail","geometryEnabled","inverseGeometry","geometrySize","cropOrigin","structureSource","structureDetail","maskOverlay","hasStructure","hasStructureDetail","showOverlay","structureAmount","localWeights0","localWeights1","localDetail0","localDetail1","sharpSource","sharpDetail","hasLocal","hasLocalDetail","hasSharp","hasSharpDetail"]) this.locations[name] = gl.getUniformLocation(this.program, name);
     gl.uniform1i(this.locations.source, 0); gl.uniform1i(this.locations.detail, 1);
     gl.uniform1i(this.locations.maskedSource,2);gl.uniform1i(this.locations.maskedDetail,3);gl.uniform1i(this.locations.structureSource,4);gl.uniform1i(this.locations.structureDetail,5);gl.uniform1i(this.locations.maskOverlay,6);
+    ["localWeights0","localWeights1","localDetail0","localDetail1","sharpSource","sharpDetail"].forEach((n,i)=>gl.uniform1i(this.locations[n],7+i));
+    this.locations.localAmount=gl.getUniformLocation(this.program,"localAmount[0]");
+    this.localAmounts=new Float32Array(32);
     this.locations.masterCurve=gl.getUniformLocation(this.program,"masterCurve[0]");
     this.locations.curveEnabled=gl.getUniformLocation(this.program,"curveEnabled");
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
@@ -164,6 +186,30 @@ export class GpuRenderer {
     if(gl.getError()!==gl.NO_ERROR){gl.deleteTexture(t);throw new Error("질감 데이터 업로드 실패");}
     const key=detail?"structureDetailTexture":"structureTexture";gl.deleteTexture(this[key]);this[key]=t;
   }
+  loadSharpness(data,detail=false){
+    const gl=this.gl,t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.R16UI,data.width,data.height,0,gl.RED_INTEGER,gl.UNSIGNED_SHORT,data.pixels);
+    if(gl.getError()!==gl.NO_ERROR){gl.deleteTexture(t);throw new Error("선예도 데이터 업로드 실패");}
+    const key=detail?"sharpDetailTexture":"sharpTexture";gl.deleteTexture(this[key]);this[key]=t;
+  }
+  clearLocal(detail=false){
+    const key=detail?"localDetailTextures":"localTextures";
+    for(const t of this[key]||[])this.gl.deleteTexture(t);this[key]=null;
+  }
+  loadLocal(data,detail=false){
+    const gl=this.gl,next=[];
+    try{for(let i=0;i<data.planes;i++){
+      const t=gl.createTexture();next.push(t);gl.bindTexture(gl.TEXTURE_2D,t);
+      gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+      const size=data.width*data.height*4;
+      gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA8,data.width,data.height,0,gl.RGBA,gl.UNSIGNED_BYTE,data.pixels.subarray(i*size,(i+1)*size));
+      if(gl.getError()!==gl.NO_ERROR)throw new Error("마스크 질감 데이터 업로드 실패");
+    }}catch(e){next.forEach(t=>gl.deleteTexture(t));throw e;}
+    this.clearLocal(detail);this[detail?"localDetailTextures":"localTextures"]=next;
+  }
   setOverlay(bitmap){
     const gl=this.gl;gl.deleteTexture(this.overlayTexture);this.overlayTexture=null;if(!bitmap)return;
     const t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
@@ -172,7 +218,7 @@ export class GpuRenderer {
   load(data, photo) {
     const next = this.upload(data);
     this.gl.deleteTexture(this.texture); this.texture = next;
-    this.gl.deleteTexture(this.structureTexture);this.structureTexture=null;this.setOverlay(null);
+    this.gl.deleteTexture(this.structureTexture);this.structureTexture=null;this.setOverlay(null);this.clearLocal();this.gl.deleteTexture(this.sharpTexture);this.sharpTexture=null;this.localEnabled=false;
     this.photo = photo; this.width = data.width; this.height = data.height;
     this.clearDetail();
     this.clearMasked();
@@ -180,7 +226,7 @@ export class GpuRenderer {
   }
   clearMasked() {this.gl.deleteTexture(this.maskedTexture);this.maskedTexture=null;this.gl.deleteTexture(this.maskedDetailTexture);this.maskedDetailTexture=null;}
   loadMasked(data) {const next=this.upload(data);this.gl.deleteTexture(this.maskedTexture);this.maskedTexture=next;}
-  clearDetail() {this.gl.deleteTexture(this.structureDetailTexture);this.structureDetailTexture=null; this.gl.deleteTexture(this.detailTexture); this.detailTexture = null;this.gl.deleteTexture(this.maskedDetailTexture);this.maskedDetailTexture=null; }
+  clearDetail() {this.clearLocal(true);this.gl.deleteTexture(this.sharpDetailTexture);this.sharpDetailTexture=null;this.gl.deleteTexture(this.structureDetailTexture);this.structureDetailTexture=null; this.gl.deleteTexture(this.detailTexture); this.detailTexture = null;this.gl.deleteTexture(this.maskedDetailTexture);this.maskedDetailTexture=null; }
   loadDetail(data,masked=null) {
     const texture = this.upload(data);
     this.clearDetail(); this.detailTexture = texture; this.detailOrigin = [data.x, data.y];this.detailSpan=data.span||[data.width,data.height];
@@ -200,6 +246,9 @@ export class GpuRenderer {
     // A normalized sampler must be bound to a normalized texture, even with the branch off.
     gl.activeTexture(gl.TEXTURE6);if(!this.emptyOverlay){this.emptyOverlay=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,this.emptyOverlay);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array(4));gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);}
     gl.activeTexture(gl.TEXTURE6);gl.bindTexture(gl.TEXTURE_2D,this.overlayTexture||this.emptyOverlay);
+    [this.localTextures?.[0]||this.emptyOverlay,this.localTextures?.[1]||this.emptyOverlay,this.localDetailTextures?.[0]||this.emptyOverlay,this.localDetailTextures?.[1]||this.emptyOverlay,this.sharpTexture||this.texture,this.sharpDetailTexture||this.sharpTexture||this.texture].forEach((t,i)=>{gl.activeTexture(gl.TEXTURE0+7+i);gl.bindTexture(gl.TEXTURE_2D,t);});
+    gl.uniform1i(u.hasLocal,Boolean(this.localEnabled&&this.localTextures));gl.uniform1i(u.hasLocalDetail,Boolean(this.localDetailEnabled&&this.localDetailTextures));
+    gl.uniform1i(u.hasSharp,Boolean(this.sharpTexture));gl.uniform1i(u.hasSharpDetail,Boolean(this.sharpDetailTexture));gl.uniform4fv(u.localAmount,this.localAmounts);
     gl.uniform1i(u.hasStructure,Boolean(this.structureTexture));gl.uniform1i(u.hasStructureDetail,Boolean(this.structureDetailTexture));gl.uniform1i(u.showOverlay,Boolean(overlay&&this.overlayTexture));gl.uniform3f(u.structureAmount,settings.dehaze||0,settings.clarity||0,settings.texture||0);
     gl.uniform1i(u.hasMaskedSource,Boolean(this.maskedTexture));gl.uniform1i(u.hasMaskedDetail,Boolean(this.maskedDetailTexture));
     gl.uniform1i(u.geometryEnabled,Boolean(geometry));
@@ -257,7 +306,7 @@ export class GpuRenderer {
   }
   dispose() {
     const gl=this.gl;gl.useProgram(null);gl.bindBuffer(gl.ARRAY_BUFFER,null);gl.bindFramebuffer(gl.FRAMEBUFFER,null);
-    this.clearDetail();this.clearMasked();gl.deleteTexture(this.texture);gl.deleteTexture(this.structureTexture);gl.deleteTexture(this.overlayTexture);gl.deleteTexture(this.emptyOverlay);
+    this.clearDetail();this.clearMasked();this.clearLocal();gl.deleteTexture(this.sharpTexture);gl.deleteTexture(this.texture);gl.deleteTexture(this.structureTexture);gl.deleteTexture(this.overlayTexture);gl.deleteTexture(this.emptyOverlay);
     if (this.target) {gl.deleteFramebuffer(this.target.framebuffer);gl.deleteTexture(this.target.texture);}
     gl.deleteBuffer(this.buffer);gl.deleteProgram(this.program);
     this.texture=null;this.target=null;

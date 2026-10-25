@@ -1,7 +1,7 @@
 import {inverse,transform} from "./geometry-math.js";
 const $=id=>document.getElementById(id);
 const clone=v=>structuredClone(v);
-const localDefaults={exposure:0,contrast:0,highlights:0,shadows:0,temperature:0,tint:0,saturation:0};
+const localDefaults={exposure:0,contrast:0,highlights:0,shadows:0,temperature:0,tint:0,saturation:0,dehaze:0,clarity:0,texture:0,sharpness:0};
 
 export class MaskEditor {
   constructor({onChange,onView,onError,onPick}) {
@@ -24,9 +24,10 @@ export class MaskEditor {
         <div id="gradient-properties"><h3>거리별 농도</h3><canvas id="density-curve" width="256" height="100" aria-label="거리별 마스크 농도"></canvas><div id="density-controls"></div><button id="density-reset">농도 기본값</button><small id="density-help"></small></div>
         <div id="local-adjustments"><h3>이 마스크의 보정</h3></div>
       </fieldset><small id="mask-help">마스크를 추가해 사진 일부만 보정하세요. 최대 8개.</small></fieldset>`;
-    for (const [key,label] of Object.entries({exposure:"노출",contrast:"대비",highlights:"하이라이트",shadows:"그림자",temperature:"색온도",tint:"틴트",saturation:"채도"})) {
+    for (const [key,label] of Object.entries({exposure:"노출",contrast:"대비",highlights:"하이라이트",shadows:"그림자",temperature:"색온도",tint:"틴트",saturation:"채도",dehaze:"디헤이즈",clarity:"명료도",texture:"텍스처",sharpness:"선예도"})) {
       const limit=key==="exposure" ? 3 : 100,step=key==="exposure" ? .01 : 1;
       const row=document.createElement("label");row.textContent=label;
+      row.title=({dehaze:"뿌연 대비를 줄이거나 안개를 더합니다",clarity:"큰 밝기 구조의 대비를 조절합니다",texture:"미세 질감을 강조하거나 부드럽게 합니다",sharpness:"작은 윤곽을 또렷하게 하거나 부드럽게 합니다"})[key]||label;
       const out=document.createElement("output");out.id=`local-${key}-value`;row.append(out);
       const input=document.createElement("input");Object.assign(input,{id:`local-${key}`,type:"range",min:-limit,max:limit,step,value:0,defaultValue:"0"});row.append(input);$("local-adjustments").append(row);
       input.oninput=()=>{const m=this.current();if (!m) return;m.adjustments[key]=Number(input.value);out.textContent=input.value;this.onChange(false);};
@@ -76,6 +77,13 @@ export class MaskEditor {
   }
   current() {return this.items[this.selected];}
   get key() {if (this.keyRevision!==this.revision) {this.keyValue=JSON.stringify(this.items);this.keyRevision=this.revision;}return this.keyValue;}
+  get colorMasks() {
+    if(this.colorRevision!==this.revision){
+      this.colorSnapshot=this.masks.map(m=>({...m,adjustments:Object.fromEntries(Object.entries(m.adjustments).filter(([k])=>!["dehaze","clarity","texture","sharpness"].includes(k)))})).filter(m=>Object.values(m.adjustments).some(v=>v!==0));
+      this.colorKey=JSON.stringify(this.colorSnapshot);this.colorRevision=this.revision;
+    }return this.colorSnapshot;
+  }
+  get bakeKey(){this.colorMasks;return this.colorKey;}
   get masks() {
     if (this.snapshotRevision!==this.revision) {
       this.snapshot=this.items.map(m=>{
@@ -85,7 +93,7 @@ export class MaskEditor {
     }
     return this.snapshot;
   }
-  set masks(value) {this.revision++;this.items=clone(value);this.selected=Math.min(this.selected,this.items.length-1);if (this.selected<0 && this.items.length) this.selected=0;this.drawing=null;this.refresh();}
+  set masks(value) {this.revision++;this.items=clone(value).map(m=>({...m,adjustments:{...localDefaults,...m.adjustments}}));this.selected=Math.min(this.selected,this.items.length-1);if (this.selected<0 && this.items.length) this.selected=0;this.drawing=null;this.refresh();}
   add(kind) {
     if (this.items.length>=8) return this.onError("마스크는 최대 8개입니다.");
     const names={brush:"브러시",gradient:"그라디언트",radial:"원형",color:"색상",luminance:"휘도"};

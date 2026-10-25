@@ -49,6 +49,17 @@ class LocalAdjustments(Model):
     temperature: float = Field(default=0, ge=-100, le=100)
     tint: float = Field(default=0, ge=-100, le=100)
     saturation: float = Field(default=0, ge=-100, le=100)
+    dehaze: float = Field(default=0, ge=-100, le=100)
+    clarity: float = Field(default=0, ge=-100, le=100)
+    texture: float = Field(default=0, ge=-100, le=100)
+    sharpness: float = Field(default=0, ge=-100, le=100)
+
+
+SPATIAL_KEYS=("dehaze","clarity","texture","sharpness")
+
+
+def has_spatial(masks):
+    return any(m.enabled and m.opacity and any(getattr(m.adjustments,k) for k in SPATIAL_KEYS) for m in masks)
 
 
 class Mask(Model):
@@ -180,22 +191,29 @@ def mask_weight(mask: Mask, original, xx, yy, full_size):
     return weight*mask.opacity if mask.enabled else weight*0
 
 
-def bake_masks(rgb, masks, *, origin=(0,0), pixel_scale=(1,1), full_size=None):
+def bake_masks(rgb, masks, *, origin=(0,0), pixel_scale=(1,1), full_size=None, structure_source=None, structure_context=None):
     masks=[m for m in masks if m.enabled and m.opacity and any(m.adjustments.model_dump().values())]
     if not masks:
         return rgb
     full_size=full_size or (round(rgb.shape[1]*pixel_scale[0]),round(rgb.shape[0]*pixel_scale[1]))
+    spatial=has_spatial(masks)
+    if spatial:
+        from . import structure
+        ctx=structure_context or structure.prepare(rgb,full_size=full_size,pixel_scale=pixel_scale,origin=origin,source=structure_source)
     result=np.empty_like(rgb)
     xx=(origin[0]+(np.arange(rgb.shape[1],dtype=np.float32)[None,:]+.5)*pixel_scale[0])/full_size[0]
     for row in range(0,rgb.shape[0],128):
         yy=(origin[1]+(np.arange(row,min(row+128,rgb.shape[0]),dtype=np.float32)[:,None]+.5)*pixel_scale[1])/full_size[1]
         original=rgb[row:row+128].astype(np.float32)/65535
         x=original.copy()
+        amounts=np.zeros((*original.shape[:2],4),dtype=np.float32) if spatial else None
         for mask in masks:
             if not mask.enabled:
                 continue
             weight=mask_weight(mask,original,xx,yy,full_size)[...,None]
             a=mask.adjustments
+            if spatial and any(getattr(a,k) for k in SPATIAL_KEYS):amounts+=weight*np.array([getattr(a,k) for k in SPATIAL_KEYS],dtype=np.float32)
+            if not any(getattr(a,k) for k in ("exposure","contrast","highlights","shadows","temperature","tint","saturation")):continue
             gains=np.exp2(np.array([.45*a.temperature/100+.15*a.tint/100,-.3*a.tint/100,-.45*a.temperature/100+.15*a.tint/100],dtype=np.float32))
             q=x*(2**a.exposure)*gains
             lum=q @ np.array([.2126,.7152,.0722],dtype=np.float32)
@@ -205,5 +223,25 @@ def bake_masks(rgb, masks, *, origin=(0,0), pixel_scale=(1,1), full_size=None):
             gray=q @ np.array([.2126,.7152,.0722],dtype=np.float32)
             q=gray[...,None]+(q-gray[...,None])*(1+a.saturation/100)
             x=x*(1-weight)+q*weight
+        if spatial and np.any(amounts):
+            amounts=np.clip(amounts,-100,100);display=structure.display(np.clip(x,0,1)*65535)
+            f=structure.fields(ctx,row,rgb.shape[1],len(x),origin=origin,pixel_scale=pixel_scale)
+            sharp=structure.sharp_field(ctx['source'],row,rgb.shape[1],len(x),origin=origin,source_origin=ctx['source_origin'],pixel_scale=ctx['scale']) if np.any(amounts[:,:,3]) else None
+            adjusted=np.clip(structure.apply(display,f,*np.moveaxis(amounts,-1,0),sharp=sharp),0,1)
+            linear=np.where(adjusted<=.04045,adjusted/12.92,((adjusted+.055)/1.055)**2.4)
+            x=np.where(np.any(amounts!=0,axis=2)[...,None],linear,x)
         result[row:row+128]=np.rint(np.clip(x,0,1)*65535).astype(np.uint16)
     return result
+
+
+def packed_weights(rgb,masks,*,origin=(0,0),pixel_scale=(1,1),full_size):
+    """At most two RGBA8 planes; strip work bounds float temporaries."""
+    h,w=rgb.shape[:2];out=np.zeros(((len(masks)+3)//4,h,w,4),dtype=np.uint8)
+    xx=(origin[0]+(np.arange(w,dtype=np.float32)[None,:]+.5)*pixel_scale[0])/full_size[0]
+    geometric=[m.model_copy(update={"enabled":True,"opacity":1}) for m in masks]
+    for row in range(0,h,128):
+        original=rgb[row:row+128].astype(np.float32)/65535
+        yy=(origin[1]+(np.arange(row,row+len(original),dtype=np.float32)[:,None]+.5)*pixel_scale[1])/full_size[1]
+        for i,m in enumerate(geometric):
+            out[i//4,row:row+128,:,i%4]=np.rint(np.clip(mask_weight(m,original,xx,yy,full_size),0,1)*255).astype(np.uint8)
+    return out

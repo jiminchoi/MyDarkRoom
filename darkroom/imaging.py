@@ -8,7 +8,7 @@ from PIL import Image, ImageCms
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .curves import curve_lut
 from . import structure
-from .masking import Mask, bake_masks
+from .masking import Mask, bake_masks, has_spatial
 from .geometry import Geometry,apply_geometry
 from .raw_support import compatible_develop
 
@@ -101,7 +101,7 @@ def _develop_native(path: Path, *, preview: bool, metadata: dict | None = None) 
 def render(rgb: np.ndarray, settings: Adjustments, *, origin=(0, 0), pixel_scale=(1, 1), full_size=None, structure_source=None) -> Image.Image:
     """Shared preview/export pipeline; process strips to bound temporary memory."""
     full_size=full_size or (round(rgb.shape[1]*pixel_scale[0]),round(rgb.shape[0]*pixel_scale[1]))
-    spatial=structure.prepare(rgb,full_size=full_size,pixel_scale=pixel_scale,origin=origin,source=structure_source) if settings.dehaze or settings.clarity or settings.texture else None
+    spatial=structure.prepare(rgb,full_size=full_size,pixel_scale=pixel_scale,origin=origin,source=structure_source) if settings.dehaze or settings.clarity or settings.texture or has_spatial(settings.masks) else None
     result = np.empty(rgb.shape, dtype=np.uint8)
     warmth = settings.temperature / 100
     tint = settings.tint / 100
@@ -111,7 +111,7 @@ def render(rgb: np.ndarray, settings: Adjustments, *, origin=(0, 0), pixel_scale
     curve=curve_lut(settings)
     identity=np.max(np.abs(curve-np.linspace(0,1,256)))<1e-7
     for row in range(0, rgb.shape[0], 128):
-        strip=bake_masks(rgb[row:row+128],settings.masks,origin=(origin[0],origin[1]+row*pixel_scale[1]),pixel_scale=pixel_scale,full_size=full_size)
+        strip=bake_masks(rgb[row:row+128],settings.masks,origin=(origin[0],origin[1]+row*pixel_scale[1]),pixel_scale=pixel_scale,full_size=full_size,structure_context=spatial)
         x = strip.astype(np.float32) / 65535
         x *= (2 ** settings.exposure) * gains
         luma = x @ np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
@@ -122,7 +122,7 @@ def render(rgb: np.ndarray, settings: Adjustments, *, origin=(0, 0), pixel_scale
         # Display-referred controls after the linear-light exposure/WB operations.
         x = np.clip(x, 0, 1)
         x = np.where(x <= 0.0031308, x * 12.92, 1.055 * np.power(x, 1 / 2.4) - 0.055)
-        if spatial is not None:
+        if settings.dehaze or settings.clarity or settings.texture:
             f=structure.fields(spatial,row,rgb.shape[1],len(x),origin=origin,pixel_scale=pixel_scale)
             x=structure.apply(x,f,settings.dehaze,settings.clarity,settings.texture)
         x = (x - 0.5) * (2 ** (settings.contrast / 100)) + 0.5

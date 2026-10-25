@@ -4,6 +4,7 @@ import { GpuRenderer } from "./gpu.js";
 import {GeometryEditor,geometryDefaults} from "./geometry.js";
 let geometryEditor;
 import { MaskEditor } from "./masks.js";
+import {LocalSpatial,hasLocalSpatial} from "./local-spatial.js";
 import {ExportDialog,saveToDirectory} from "./export.js";
 let maskEditor, maskBusy=false, appliedMaskKey="[]", maskTimer, maskGeneration=0, maskAbort;
 let maskRequestRunning=false;
@@ -66,7 +67,16 @@ async function linearData(response,channels=3) {
   if (!data.width || !data.height || buffer.byteLength !== data.width*data.height*channels*2) throw new Error("미리보기 데이터가 올바르지 않습니다.");
   return data;
 }
-function hasSpatial(){return ["dehaze","clarity","texture"].some(k=>Number($(k).value)!==0);}
+const localSpatial=new LocalSpatial({post:postImage,linear:linearData,onReady:()=>{syncLocal();queueRender();scheduleHistogram();},onError:error});
+function syncLocal(){
+ if(opening)return;
+ localSpatial.sync(photo,gpu,maskEditor?.masks||[],canvas.dataset.detail?{region:canvas.dataset.detail,sampled:detailCache?.sampled}:null);
+ const sharp=gpu?.localAmounts.some((v,i)=>i%4===3&&v!==0);
+ canvas.dataset.localReady=String(Boolean(gpu?.localEnabled&&gpu.structureTexture&&(!sharp||gpu.sharpTexture)));
+ canvas.dataset.localDetailReady=String(Boolean(gpu?.localDetailEnabled&&(gpu.structureDetailTexture||detailCache?.sampled)&&(!sharp||gpu.sharpDetailTexture||detailCache?.sampled)));
+}
+function gpuValues(){return {...settings(false),masks:maskEditor.colorMasks};}
+function hasSpatial(){return ["dehaze","clarity","texture"].some(k=>Number($(k).value)!==0)||hasLocalSpatial(maskEditor?.masks||[]);}
 async function ensureStructure(force=false){
  $("spatial-status").hidden=!gpu||!photo||!hasSpatial()||Boolean(gpu.structureTexture);
  if(!gpu||!photo||(!force&&!hasSpatial()))return;
@@ -76,7 +86,7 @@ async function ensureStructure(force=false){
      structurePhoto=id;structureAbort?.abort();const abort=new AbortController();structureAbort=abort;
      const promise=(async()=>{try{
        const data=await linearData(await fetch(`/api/photos/${id}/structure`,{signal:abort.signal}),4);
-       if(photo?.id!==id||!gpu)return;gpu.loadStructure(data);$("spatial-status").hidden=true;canvas.dataset.structureReady="true";queueRender();scheduleHistogram();
+       if(photo?.id!==id||!gpu)return;gpu.loadStructure(data);$("spatial-status").hidden=true;canvas.dataset.structureReady="true";syncLocal();queueRender();scheduleHistogram();
      }catch(e){if(e.name!=="AbortError"&&photo?.id===id)error("질감 준비 실패: "+e.message);}finally{if(structurePromise===promise)structurePromise=null;}})();
      structurePromise=promise;
    }
@@ -87,10 +97,11 @@ async function ensureStructure(force=false){
  structureDetailAbort?.abort();const controller=new AbortController();structureDetailAbort=controller;
  const [x,y,width,height]=canvas.dataset.detail.split(',');
  try{const data=await linearData(await fetch(`/api/photos/${id}/structure?x=${x}&y=${y}&width=${width}&height=${height}`,{signal:controller.signal}),4);
-   if(gpu&&photo?.id===id&&id+":"+canvas.dataset.detail===key){gpu.loadStructure(data,true);queueRender();}
+   if(gpu&&photo?.id===id&&id+":"+canvas.dataset.detail===key){gpu.loadStructure(data,true);syncLocal();queueRender();}
  }catch(e){if(e.name!=="AbortError"&&structureDetailKey===key){structureDetailKey="";error("100% 질감 준비 실패: "+e.message);}}
 }
 function cpuCanvas() {
+  localSpatial.reset();
   const previous=gpu;gpu=null;previous?.dispose();
   const replacement = canvas.cloneNode(false); canvas.replaceWith(replacement); canvas = replacement;
   gpu = null; context = canvas.getContext("2d",{alpha:false});
@@ -105,7 +116,7 @@ function closeBitmap(image) { image?.close(); }
 function clearDetail() {
   structureDetailAbort?.abort();structureDetailKey="";detailRevision++; detailAbort?.abort(); clearTimeout(detailTimer);
   if (detail) { closeBitmap(detail.original); closeBitmap(detail.edited); }
-  detail = null;detailCache=null; gpu?.clearDetail(); delete canvas.dataset.detail;
+  detail = null;detailCache=null; gpu?.clearDetail(); delete canvas.dataset.detail;syncLocal();
 }
 async function loadCpu(next) {
   const image = await createImageBitmap(await (await postImage(next.id,"preview",defaults)).blob());
@@ -188,7 +199,7 @@ async function openFile(file) {
   if (!/\.nef$/i.test(file.name)) return error("니콘 NEF 파일을 선택해 주세요.");
   if (file.size > 256*1024*1024) return error("사진 한 장의 최대 크기는 256 MB입니다.");
   clearTimeout(structureTimer);structureAbort?.abort();structurePromise=null;structurePhoto=null;delete canvas.dataset.structureReady;$("spatial-status").hidden=true;
-  opening = true; revision++; clearTimeout(editTimer); clearDetail(); availability();
+  opening = true;localSpatial.reset(); revision++; clearTimeout(editTimer); clearDetail(); availability();
   $("error").hidden = true; busy("NEF를 열고 400만 화소 미리보기를 준비하고 있어요…");
   try {
     const form = new FormData(); form.append("file",file);
@@ -211,15 +222,15 @@ async function openFile(file) {
     $("dimensions").textContent = `${next.width} × ${next.height} · 미리보기 ${(next.preview_width*next.preview_height/1e6).toFixed(1)}MP`;
     updateViewButtons(); resize(); status("준비됐어요 · 원본은 안전하게"); scheduleHistogram();structureTimer=setTimeout(()=>ensureStructure(true),700);
   } catch (e) { error(e.message); }
-  finally { opening = false; busy(null); availability(); $("file").value=""; }
+  finally { opening = false;syncLocal(); busy(null); availability(); $("file").value=""; }
 }
 function scheduleEdits(event) {
   if(!gpu&&detail)clearDetail();
   if (event?.target?.id.startsWith("curve_")) {customCurve=null;constrainCurve(event.target);}
-  ensureStructure();
+  syncLocal();ensureStructure();
   revision++;cancelAnimationFrame(outputFrame);outputFrame=requestAnimationFrame(updateOutputs);
-  if (gpu && maskBusy && maskEditor.key===appliedMaskKey) {maskGeneration++;clearTimeout(maskTimer);maskBusy=false;availability();}
-  if (gpu && maskEditor.key!==appliedMaskKey) {scheduleMaskBake();}
+  if (gpu && maskBusy && maskEditor.bakeKey===appliedMaskKey) {maskGeneration++;clearTimeout(maskTimer);maskBusy=false;availability();}
+  if (gpu && maskEditor.bakeKey!==appliedMaskKey) {scheduleMaskBake();}
   else if (gpu) { queueRender(); status(gpu.software ? "보정 완료 · WebGL2 소프트웨어" : "보정 완료 · WebGL2 미리보기"); scheduleHistogram(); }
   else if(!geometryEditor?.active) { clearTimeout(editTimer); status("보정 적용 중…"); editTimer=setTimeout(refreshCpu,100); }
   scheduleOverlay();
@@ -314,14 +325,14 @@ async function loadDetail(){
  const inner=gpu?(geometry?projectedRegion(visible,geometry,[photo.width,photo.height],2):visible):visible;
  const region=gpu?(geometry?projectedRegion(expanded,geometry,[photo.width,photo.height],4):expanded):expanded;
  if(!region)return;
- const key=gpu?`${id}:${maskEditor.key}`:`${id}:${revision}:${JSON.stringify(geometryEditor?.active?geometryEditor.value:geometryDefaults())}`;
+ const key=gpu?`${id}:${maskEditor.bakeKey}`:`${id}:${revision}:${JSON.stringify(geometryEditor?.active?geometryEditor.value:geometryDefaults())}`;
  if(detailCache?.key===key&&containsRegion(detailCache.region,inner)&&(!detailCache.sampled||v.scale<=detailCache.scale)){status("확대 · 캐시된 원본 영역 · 드래그로 이동");return;}
  detailAbort=new AbortController();const signal=detailAbort.signal;
  const query=`x=${region.x}&y=${region.y}&width=${region.width}&height=${region.height}`;
  status("확대 영역을 정밀하게 불러오는 중…");let original,edited;
  try{
    if(gpu){
-     const values=settings(),data=await linearData(await postImage(id,`region?${query}`,values,signal));
+     const values=gpuValues(),data=await linearData(await postImage(id,`region?${query}`,values,signal));
      if(version!==detailRevision||photo?.id!==id||mode!=="zoom")return;
      const masked=values.masks.length?await linearData(await postImage(id,`region?${query}&masked=true`,values,signal)):null;
      if(version!==detailRevision||photo?.id!==id||mode!=="zoom")return;
@@ -338,7 +349,7 @@ async function loadDetail(){
      detail={original,edited,x:region.x,y:region.y,width,height};detailCache={key,scale:v.scale,sampled:edited.width!==width||edited.height!==height,region:{x:region.x,y:region.y,width,height}};
      canvas.dataset.detail=`${region.x},${region.y},${width},${height}`;
    }
-   ensureStructure();render();status("확대 · 원본 영역 갱신 완료 · 드래그로 이동");
+   syncLocal();ensureStructure();render();status("확대 · 원본 영역 갱신 완료 · 드래그로 이동");
  }catch(e){original?.close();edited?.close();if(e.name!=="AbortError"&&version===detailRevision){error(e.message);status("축소 미리보기 표시 중 · 확대 영역을 다시 이동해 주세요");}}
 }
 let drag=null;
@@ -528,20 +539,20 @@ function scheduleMaskBake() {
  maskTimer=setTimeout(async()=>{
   if (maskRequestRunning || !photo || !gpu || opening) return;
   maskRequestRunning=true;
-  const id=photo.id,values=settings(),key=maskEditor.key;
+  const id=photo.id,values=gpuValues(),key=maskEditor.bakeKey;
   try {
    if (!values.masks.length) {gpu.clearMasked();appliedMaskKey=key;}
    else {
     maskAbort=new AbortController();
     const data=await linearData(await postImage(id,"masked-pixels",values,maskAbort.signal));
-    if (photo.id!==id || key!==maskEditor.key) return;
+    if (photo.id!==id || key!==maskEditor.bakeKey) return;
     gpu.loadMasked(data);appliedMaskKey=key;
    }
    clearDetail();render();scheduleDetail();scheduleHistogram();status("마스크 보정 완료");
   } catch (e) {if (e.name!=="AbortError" && generation===maskGeneration) error("마스크 보정 실패: "+e.message);}
   finally {
     maskRequestRunning=false;
-    if (generation!==maskGeneration && gpu && !opening && maskEditor.key!==appliedMaskKey) scheduleMaskBake();
+    if (generation!==maskGeneration && gpu && !opening && maskEditor.bakeKey!==appliedMaskKey) scheduleMaskBake();
     else {clearTimeout(maskTimer);maskBusy=false;availability();scheduleHistogram();}
   }
  },120);
@@ -648,7 +659,7 @@ drawCurve();
 window.addEventListener("pagehide",event=>{
  if (event.persisted) return;
  geometryEditor?.clear();
- clearTimeout(structureTimer);structureAbort?.abort();structureDetailAbort?.abort();worker.terminate();gpu?.dispose();
+ clearTimeout(structureTimer);structureAbort?.abort();structureDetailAbort?.abort();localSpatial.reset();worker.terminate();gpu?.dispose();
  if (cpuEdited!==cpuOriginal) closeBitmap(cpuEdited);closeBitmap(cpuOriginal);
  if (detail) {closeBitmap(detail.original);closeBitmap(detail.edited);}maskEditor?.setOverlay(null);
 });

@@ -17,8 +17,8 @@ from starlette.concurrency import run_in_threadpool
 
 from .imaging import Adjustments, develop, jpeg,render
 from .geometry import estimate_geometry
-from .structure import packed
-from .masking import bake_masks, mask_weight,brush_grid
+from .structure import packed,packed_sharpness
+from .masking import bake_masks, mask_weight,brush_grid,packed_weights
 from .raw_support import RawCompatibilityError,converter_path
 
 STATIC = Path(__file__).parent / "static"
@@ -114,7 +114,7 @@ class Studio:
                 if settings is not None:
                     scale=(1,1) if region else (photo.width/width,photo.height/height)
                     if linear:
-                        rgb=bake_masks(rgb,settings.masks,origin=(x,y),pixel_scale=scale,full_size=(photo.width,photo.height))
+                        rgb=bake_masks(rgb,settings.masks,origin=(x,y),pixel_scale=scale,full_size=(photo.width,photo.height),structure_source=mapping)
                     else:
                         return jpeg(rgb, settings, quality=95, origin=(x,y),pixel_scale=scale,full_size=(photo.width,photo.height),geometry=False,structure_source=mapping), headers
                 return rgb.astype("<u2", copy=False).tobytes(), headers
@@ -183,7 +183,7 @@ def index():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "rawpy": rawpy.__version__, "libraw": ".".join(map(str, rawpy.libraw_version)),"dng_converter":bool(converter_path()),"app_version":"0.9.0"}
+    return {"status": "ok", "rawpy": rawpy.__version__, "libraw": ".".join(map(str, rawpy.libraw_version)),"dng_converter":bool(converter_path()),"app_version":"0.10.0"}
 
 
 @app.post("/api/photos")
@@ -319,7 +319,7 @@ def auto_light(photo_id:str,request:Request):
 
 
 @app.get("/api/photos/{photo_id}/structure")
-def structure_pixels(photo_id:str,request:Request,x:int|None=Query(default=None,ge=0),y:int=Query(default=0,ge=0),width:int=Query(default=1024,ge=1,le=4096),height:int=Query(default=1024,ge=1,le=4096)):
+def structure_pixels(photo_id:str,request:Request,x:int|None=Query(default=None,ge=0),y:int=Query(default=0,ge=0),width:int=Query(default=1024,ge=1,le=4096),height:int=Query(default=1024,ge=1,le=4096),kind:str=Query(default="structure",pattern="^(structure|sharpness)$")):
     studio=request.app.state.studio
     with studio.lock:
         photo=studio.get(photo_id);mapping=None
@@ -329,7 +329,7 @@ def structure_pixels(photo_id:str,request:Request,x:int|None=Query(default=None,
             else:
                 if x>=photo.width or y>=photo.height:raise HTTPException(422,"사진 범위를 벗어난 위치입니다.")
                 mapping=studio.full(photo);rgb=mapping[y:y+height,x:x+width];origin=(x,y);scale=(1,1);source=mapping
-            data=packed(rgb,full_size=(photo.width,photo.height),pixel_scale=scale,origin=origin,source=source)
+            data=packed_sharpness(rgb,pixel_scale=scale,origin=origin,source=source) if kind=="sharpness" else packed(rgb,full_size=(photo.width,photo.height),pixel_scale=scale,origin=origin,source=source)
             return Response(data.tobytes(),media_type="application/octet-stream",headers={"X-Image-Width":str(data.shape[1]),"X-Image-Height":str(data.shape[0]),"X-Image-X":str(origin[0]),"X-Image-Y":str(origin[1])})
         finally:
             if mapping is not None:mapping._mmap.close()
@@ -342,10 +342,28 @@ def zoom_region(photo_id:str,settings:Adjustments,request:Request,x:int=Query(ge
         photo=studio.get(photo_id);mapping=studio.full(photo)
         try:
             rgb,span=source_region(mapping,x,y,width,height)
-            if masked:rgb=bake_masks(rgb,settings.masks,origin=(x,y),pixel_scale=(span[0]/rgb.shape[1],span[1]/rgb.shape[0]),full_size=(photo.width,photo.height))
+            if masked:rgb=bake_masks(rgb,settings.masks,origin=(x,y),pixel_scale=(span[0]/rgb.shape[1],span[1]/rgb.shape[0]),full_size=(photo.width,photo.height),structure_source=mapping if rgb.shape[1::-1]==span else None)
             return Response(rgb.astype('<u2',copy=False).tobytes(),media_type='application/octet-stream',headers={"X-Image-Width":str(rgb.shape[1]),"X-Image-Height":str(rgb.shape[0]),"X-Image-X":str(x),"X-Image-Y":str(y),"X-Region-Width":str(span[0]),"X-Region-Height":str(span[1])})
         except ValueError as exc:raise HTTPException(422,str(exc)) from exc
         finally:mapping._mmap.close()
+
+
+@app.post("/api/photos/{photo_id}/mask-fields")
+def mask_fields(photo_id:str,settings:Adjustments,request:Request,x:int|None=Query(default=None,ge=0),y:int=Query(default=0,ge=0),width:int=Query(default=1024,ge=1,le=100000),height:int=Query(default=1024,ge=1,le=100000)):
+    from .viewport import source_region
+    studio=request.app.state.studio
+    with studio.lock:
+        photo=studio.get(photo_id);mapping=None
+        try:
+            if x is None:rgb=photo.preview;origin=(0,0);span=(photo.width,photo.height)
+            else:
+                mapping=studio.full(photo);rgb,span=source_region(mapping,x,y,width,height);origin=(x,y)
+            h,w=rgb.shape[:2]
+            data=packed_weights(rgb,settings.masks,origin=origin,pixel_scale=(span[0]/w,span[1]/h),full_size=(photo.width,photo.height))
+            return Response(data.tobytes(),media_type="application/octet-stream",headers={"X-Image-Width":str(w),"X-Image-Height":str(h),"X-Mask-Planes":str(len(data))})
+        except ValueError as exc:raise HTTPException(422,str(exc)) from exc
+        finally:
+            if mapping is not None:mapping._mmap.close()
 
 
 @app.post("/api/photos/{photo_id}/viewport")
