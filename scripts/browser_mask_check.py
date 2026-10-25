@@ -39,7 +39,13 @@ def workflow(browser,args,cpu=False):
         page.mouse.move(*pos(a));page.mouse.down();page.mouse.move(*pos(b),steps=12);page.mouse.up()
     add("brush");slider("brush-radius",.12)
     stroke((.4,.5),(.6,.5));slider("local-exposure",1);idle()
-    page.wait_for_function("""()=>{const c=document.getElementById('mask-overlay'),ctx=c.getContext('2d');return ctx.getImageData(Math.floor(c.width/2),Math.floor(c.height/2),1,1).data[3]>0}""",timeout=60000)
+    page.wait_for_function("document.getElementById('mask-overlay').dataset.ready==='true'",timeout=60000)
+    if not cpu:
+        page.evaluate("()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))")
+        shown=page.locator('#preview').evaluate('c=>c.toDataURL()')
+        page.locator('#mask-show').uncheck()
+        page.evaluate("()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))")
+        assert page.locator('#preview').evaluate('c=>c.toDataURL()')!=shown
     assert states[-1]["masks"][0]["strokes"]
     page.locator("#zoom").click();page.wait_for_function("Boolean(document.getElementById('preview').dataset.detail)",timeout=60000)
     if not cpu:
@@ -53,6 +59,7 @@ def workflow(browser,args,cpu=False):
         expected=np.asarray(render(raw,Adjustments(**{**settings,"masks":[]})))[0,0]
         actual=page.locator("#preview").evaluate("""(c,{x,y})=>{const gl=c.getContext('webgl2'),p=new Uint8Array(4);gl.readPixels(x,c.height-y-1,1,1,gl.RGBA,gl.UNSIGNED_BYTE,p);return [...p].slice(0,3)}""",{"x":mx,"y":my})
         assert np.max(np.abs(np.array(actual,dtype=int)-expected.astype(int)))<=1
+    page.locator("#mask-show").check()
     page.locator("#fit").click()
     page.locator("#brush-erase").check();stroke((.49,.5),(.51,.5));idle()
     assert states[-1]["masks"][0]["strokes"][-1]["erase"]
@@ -90,7 +97,8 @@ def workflow(browser,args,cpu=False):
     assert page.locator("#mask-select option").count()==5
     page.locator("#compare").dispatch_event("keydown",{"key":"Enter"})
     assert page.locator("#compare-label").is_visible()
-    assert page.locator("#mask-overlay").evaluate("c=>!c.getContext('2d').getImageData(Math.floor(c.width/2),Math.floor(c.height/2),1,1).data[3]")
+    assert page.locator("#mask-overlay").is_hidden()
+    page.wait_for_function("""()=>{const c=document.getElementById('mask-overlay');return !c.getContext('2d').getImageData(Math.floor(c.width/2),Math.floor(c.height/2),1,1).data[3]}""")
     page.locator("#compare").dispatch_event("keyup",{"key":"Enter"})
     if args.artifacts:
         page.screenshot(path=str(Path(args.artifacts)/f"stage4-{'cpu' if cpu else 'gpu'}.png"),full_page=True)

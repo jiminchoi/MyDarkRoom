@@ -1,3 +1,4 @@
+import {inverse,transform} from "./geometry-math.js";
 const $=id=>document.getElementById(id);
 const clone=v=>structuredClone(v);
 const localDefaults={exposure:0,contrast:0,highlights:0,shadows:0,temperature:0,tint:0,saturation:0};
@@ -126,11 +127,13 @@ export class MaskEditor {
       return true;
     }
     if (m.kind==="brush" && (m.strokes.length>=64 || m.strokes.reduce((n,s)=>n+s.points.length,0)>=2048)) {this.onError("브러시 한도에 도달했습니다. 새 마스크를 추가하세요.");return true;}
-    this.drawing=m.kind==="brush" ? {points:[point],radius:Number($("brush-radius").value),feather:Number($("brush-feather").value),erase:$("brush-erase").checked} : {start:point,end:point};
+    const paint=point.paint||{x:point.x,y:point.y};
+    this.drawing=m.kind==="brush" ? {points:[paint],transform:point.transform||null,radius:Number($("brush-radius").value)*(point.brushScale||1),feather:Number($("brush-feather").value),erase:$("brush-erase").checked} : {start:paint,end:paint,transform:point.transform||null};
     this.onView();return true;
   }
   move(point) {
     if (!this.drawing || !point) return;
+    if(this.drawing.transform){const p=transform(this.drawing.transform,[point.x,point.y]);point={x:p[0],y:p[1]};}else point={x:point.x,y:point.y};
     if (this.current().kind==="brush") {
       let points=this.drawing.points;const last=points.at(-1);
       if (Math.hypot(point.x-last.x,point.y-last.y)<.001) return;
@@ -146,21 +149,35 @@ export class MaskEditor {
       if (m.kind==="brush") {
         if (m.strokes.reduce((n,s)=>n+s.points.length,0)+this.drawing.points.length>2048) this.onError("브러시 포인트 한도에 도달했습니다. 새 마스크를 추가하세요.");
         else m.strokes=[...m.strokes,this.drawing];
-      } else {m.start=this.drawing.start;m.end=this.drawing.end;}
+      } else {m.start=this.drawing.start;m.end=this.drawing.end;m.transform=this.drawing.transform;}
     }
     this.drawing=null;if (!cancel) this.onChange(true);else this.onView();return true;
   }
   setOverlay(image) {this.bitmap?.close();this.bitmap=image;}
-  draw(ctx,v,photo,width,height) {
+  warpOverlay(ctx,project,photo){
+    const image=this.bitmap,n=16;
+    const triangle=(a,b,c)=>{
+      const src=[a,b,c].map(p=>[p[0]*image.width,p[1]*image.height]),dst=[a,b,c].map(p=>project({x:p[0],y:p[1]}));
+      const [p,q,r]=src,den=(q[0]-p[0])*(r[1]-p[1])-(r[0]-p[0])*(q[1]-p[1]);if(!den||dst.flat().some(v=>!Number.isFinite(v)))return;
+      const coeff=k=>{const u=((dst[1][k]-dst[0][k])*(r[1]-p[1])-(dst[2][k]-dst[0][k])*(q[1]-p[1]))/den,v=((q[0]-p[0])*(dst[2][k]-dst[0][k])-(r[0]-p[0])*(dst[1][k]-dst[0][k]))/den;return [u,v,dst[0][k]-u*p[0]-v*p[1]];};
+      const x=coeff(0),y=coeff(1);ctx.save();ctx.beginPath();ctx.moveTo(...dst[0]);ctx.lineTo(...dst[1]);ctx.lineTo(...dst[2]);ctx.closePath();ctx.clip();ctx.transform(x[0],y[0],x[1],y[1],x[2],y[2]);ctx.drawImage(image,0,0);ctx.restore();
+    };
+    for(let y=0;y<n;y++)for(let x=0;x<n;x++){const a=[x/n,y/n],b=[(x+1)/n,y/n],c=[(x+1)/n,(y+1)/n],d=[x/n,(y+1)/n];triangle(a,b,c);triangle(a,c,d);}
+  }
+  draw(ctx,v,photo,width,height,{project=null,skipBitmap=false}={}) {
     ctx.clearRect(0,0,width,height);
     if (!$("mask-show").checked || !this.current()) return;
     const x=v.offset[0]-v.origin[0]*v.scale,y=v.offset[1]-v.origin[1]*v.scale;
-    if (this.bitmap) ctx.drawImage(this.bitmap,x,y,photo.width*v.scale,photo.height*v.scale);
-    const pos=p=>[x+p.x*photo.width*v.scale,y+p.y*photo.height*v.scale];
+    if(this.bitmap&&!skipBitmap){if(project)this.warpOverlay(ctx,project,photo);else ctx.drawImage(this.bitmap,x,y,photo.width*v.scale,photo.height*v.scale);}
+    const data=this.drawing||this.current(),space=data.transform?inverse(data.transform):null;
+    const pos=p=>{let q=[p.x,p.y];if(space)q=transform(space,q);return project?project({x:q[0],y:q[1]}):[x+q[0]*photo.width*v.scale,y+q[1]*photo.height*v.scale];};
     if (["gradient","radial"].includes(this.current().kind) && this.active) {
       const m=this.drawing || this.current();const a=pos(m.start),b=pos(m.end);
       ctx.strokeStyle="white";ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(...a);ctx.lineTo(...b);ctx.stroke();
-      if (this.current().kind==="radial") {ctx.beginPath();ctx.arc(...a,Math.hypot(b[0]-a[0],b[1]-a[1]),0,Math.PI*2);ctx.stroke();}
+      if (this.current().kind==="radial") {
+        const r=Math.hypot((m.end.x-m.start.x)*photo.width,(m.end.y-m.start.y)*photo.height);ctx.beginPath();
+        for(let i=0;i<=64;i++){const t=i/64*Math.PI*2,p=pos({x:m.start.x+Math.cos(t)*r/photo.width,y:m.start.y+Math.sin(t)*r/photo.height});if(!i)ctx.moveTo(...p);else ctx.lineTo(...p);}ctx.stroke();
+      }
       for (const p of [a,b]) {ctx.beginPath();ctx.arc(...p,5,0,Math.PI*2);ctx.stroke();}
     }
     if (this.drawing?.points) {

@@ -17,6 +17,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .imaging import Adjustments, develop, jpeg,render
 from .geometry import estimate_geometry
+from .structure import packed
 from .masking import bake_masks, mask_weight,brush_grid
 from .raw_support import RawCompatibilityError,converter_path
 
@@ -115,7 +116,7 @@ class Studio:
                     if linear:
                         rgb=bake_masks(rgb,settings.masks,origin=(x,y),pixel_scale=scale,full_size=(photo.width,photo.height))
                     else:
-                        return jpeg(rgb, settings, quality=95, origin=(x,y),pixel_scale=scale,full_size=(photo.width,photo.height),geometry=False), headers
+                        return jpeg(rgb, settings, quality=95, origin=(x,y),pixel_scale=scale,full_size=(photo.width,photo.height),geometry=False,structure_source=mapping), headers
                 return rgb.astype("<u2", copy=False).tobytes(), headers
             except (rawpy.LibRawError, ValueError) as exc:
                 raise HTTPException(422, "원본 해상도 미리보기를 만들 수 없습니다.") from exc
@@ -182,7 +183,7 @@ def index():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "rawpy": rawpy.__version__, "libraw": ".".join(map(str, rawpy.libraw_version)),"dng_converter":bool(converter_path()),"app_version":"0.7.1"}
+    return {"status": "ok", "rawpy": rawpy.__version__, "libraw": ".".join(map(str, rawpy.libraw_version)),"dng_converter":bool(converter_path()),"app_version":"0.8.0"}
 
 
 @app.post("/api/photos")
@@ -315,3 +316,20 @@ def auto_light(photo_id:str,request:Request):
         shadows=float(np.clip((.06-low*2**exposure)*250,0,25)) if high>.12 else 0
         contrast=float(np.clip((.5-(high-low))*12,-8,8))
         return {"adjustments":{"exposure":round(exposure,2),"contrast":round(contrast),"highlights":round(highlights),"shadows":round(shadows)}}
+
+
+@app.get("/api/photos/{photo_id}/structure")
+def structure_pixels(photo_id:str,request:Request,x:int|None=Query(default=None,ge=0),y:int=Query(default=0,ge=0),width:int=Query(default=1024,ge=1,le=4096),height:int=Query(default=1024,ge=1,le=4096)):
+    studio=request.app.state.studio
+    with studio.lock:
+        photo=studio.get(photo_id);mapping=None
+        try:
+            if x is None:
+                rgb=photo.preview;origin=(0,0);scale=(photo.width/rgb.shape[1],photo.height/rgb.shape[0]);source=None
+            else:
+                if x>=photo.width or y>=photo.height:raise HTTPException(422,"사진 범위를 벗어난 위치입니다.")
+                mapping=studio.full(photo);rgb=mapping[y:y+height,x:x+width];origin=(x,y);scale=(1,1);source=mapping
+            data=packed(rgb,full_size=(photo.width,photo.height),pixel_scale=scale,origin=origin,source=source)
+            return Response(data.tobytes(),media_type="application/octet-stream",headers={"X-Image-Width":str(data.shape[1]),"X-Image-Height":str(data.shape[0]),"X-Image-X":str(origin[0]),"X-Image-Y":str(origin[1])})
+        finally:
+            if mapping is not None:mapping._mmap.close()

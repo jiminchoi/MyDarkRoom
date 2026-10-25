@@ -17,6 +17,10 @@ uniform bool hasDetail, before, split, histogram;
 uniform bool geometryEnabled;
 uniform mat3 inverseGeometry;
 uniform vec2 geometrySize, cropOrigin;
+uniform usampler2D structureSource,structureDetail;
+uniform sampler2D maskOverlay;
+uniform bool hasStructure,hasStructureDetail,showOverlay;
+uniform vec3 structureAmount;
 uniform vec4 light;
 uniform vec3 color;
 uniform bool monochrome;
@@ -39,6 +43,22 @@ vec3 sample16(usampler2D tex, vec2 uv) {
   vec3 c11 = vec3(texelFetch(tex, clamp(a+ivec2(1,1), ivec2(0), size-1), 0).rgb);
   return mix(mix(c00,c10,f.x),mix(c01,c11,f.x),f.y)/65535.;
 }
+vec4 sampleFields(usampler2D tex,vec2 uv){
+ ivec2 size=textureSize(tex,0);vec2 p=uv*vec2(size)-.5;ivec2 a=ivec2(floor(p));vec2 f=fract(p);
+ vec4 c00=vec4(texelFetch(tex,clamp(a,ivec2(0),size-1),0)),c10=vec4(texelFetch(tex,clamp(a+ivec2(1,0),ivec2(0),size-1),0));
+ vec4 c01=vec4(texelFetch(tex,clamp(a+ivec2(0,1),ivec2(0),size-1),0)),c11=vec4(texelFetch(tex,clamp(a+ivec2(1,1),ivec2(0),size-1),0));
+ return mix(mix(c00,c10,f.x),mix(c01,c11,f.x),f.y)/65535.;
+}
+vec3 spatial(vec3 x,vec4 field){
+ float lum=dot(x,vec3(.2126,.7152,.0722)),fine=field.y-.5,broad=field.z-.5;
+ float gate=clamp((abs(fine)-.004)/.016,0.,1.);gate=gate*gate*(3.-2.*gate);
+ float middle=4.*clamp(lum,0.,1.)*(1.-clamp(lum,0.,1.));
+ float delta=(structureAmount.y/100.*.55*clamp(broad,-.10,.10)+structureAmount.z/100.*.8*clamp(fine,-.05,.05)*gate)*middle;
+ float target=lum+delta*clamp(lum/max(field.x,.04),.25,2.),amount=structureAmount.x/100.;
+ if(amount>0.){float v=clamp(field.w,0.,.75)*amount*.55;target=max((target-v)/(1.-v),target*.55);}
+ else if(amount<0.)target=target+(1.-target)*(-amount)*.22;
+ float gain=clamp(target/max(lum,.01),.5,2.);return x*gain+max(target-lum*gain,0.);
+}
 void main() {
   vec2 screen = vec2(gl_FragCoord.x, outputSize.y-gl_FragCoord.y);
   vec2 extent=geometryEnabled ? geometrySize : fullSize;
@@ -54,7 +74,8 @@ void main() {
   bool original = !histogram && (before || (split && screen.x < outputSize.x*splitPosition));
   vec3 x = hasMaskedSource && !original ? sample16(maskedSource,p/fullSize) : sample16(source, p/fullSize);
   vec2 dp = p-detailOrigin;
-  if (hasDetail && !histogram && !geometryEnabled && all(greaterThanEqual(dp,vec2(0))) && all(lessThan(dp,vec2(textureSize(detail,0))))) {
+  bool useDetail=hasDetail && !histogram && !geometryEnabled && all(greaterThanEqual(dp,vec2(0))) && all(lessThan(dp,vec2(textureSize(detail,0))));
+  if (useDetail) {
     x = sample16(detail, dp/vec2(textureSize(detail,0)));
     if (hasMaskedDetail && !original) x=sample16(maskedDetail, dp/vec2(textureSize(detail,0)));
   }
@@ -68,6 +89,7 @@ void main() {
   x *= exp2(l.w/100.*shadow+l.z/100.*highlight);
   x = clamp(x,0.,1.);
   x = mix(1.055*pow(x,vec3(1./2.4))-.055,12.92*x,lessThanEqual(x,vec3(.0031308)));
+  if(!original&&hasStructure&&any(notEqual(structureAmount,vec3(0)))){vec4 f=useDetail&&hasStructureDetail?sampleFields(structureDetail,dp/vec2(textureSize(detail,0))):sampleFields(structureSource,p/fullSize);x=spatial(x,f);}
   x = (x-.5)*exp2(l.y/100.)+.5;
   if (!original && curveEnabled) x=vec3(curveValue(x.r),curveValue(x.g),curveValue(x.b));
   lum = dot(x,vec3(.2126,.7152,.0722));
@@ -82,6 +104,7 @@ void main() {
     float noise=float(h&65535u)/65535.-.5;
     x+=vec3(noise*grain/100.*.16);
   }
+  if(showOverlay&&!histogram&&!original){vec4 o=texture(maskOverlay,p/fullSize);x=mix(clamp(x,0.,1.),o.rgb,o.a);}
   result = vec4(clamp(x,0.,1.),1.);
 }
 `;
@@ -112,9 +135,9 @@ export class GpuRenderer {
     const position = gl.getAttribLocation(this.program, "position");
     gl.enableVertexAttribArray(position); gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
     this.locations = {};
-    for (const name of ["source","detail","outputSize","fullSize","offset","origin","detailOrigin","scale","splitPosition","hasDetail","before","split","histogram","light","color","monochrome","mixer","tone","toneAmount","grain","grainSize","maskedSource","maskedDetail","hasMaskedSource","hasMaskedDetail","geometryEnabled","inverseGeometry","geometrySize","cropOrigin"]) this.locations[name] = gl.getUniformLocation(this.program, name);
+    for (const name of ["source","detail","outputSize","fullSize","offset","origin","detailOrigin","scale","splitPosition","hasDetail","before","split","histogram","light","color","monochrome","mixer","tone","toneAmount","grain","grainSize","maskedSource","maskedDetail","hasMaskedSource","hasMaskedDetail","geometryEnabled","inverseGeometry","geometrySize","cropOrigin","structureSource","structureDetail","maskOverlay","hasStructure","hasStructureDetail","showOverlay","structureAmount"]) this.locations[name] = gl.getUniformLocation(this.program, name);
     gl.uniform1i(this.locations.source, 0); gl.uniform1i(this.locations.detail, 1);
-    gl.uniform1i(this.locations.maskedSource,2);gl.uniform1i(this.locations.maskedDetail,3);
+    gl.uniform1i(this.locations.maskedSource,2);gl.uniform1i(this.locations.maskedDetail,3);gl.uniform1i(this.locations.structureSource,4);gl.uniform1i(this.locations.structureDetail,5);gl.uniform1i(this.locations.maskOverlay,6);
     this.locations.masterCurve=gl.getUniformLocation(this.program,"masterCurve[0]");
     this.locations.curveEnabled=gl.getUniformLocation(this.program,"curveEnabled");
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
@@ -132,9 +155,23 @@ export class GpuRenderer {
     if (gl.getError() !== gl.NO_ERROR) { gl.deleteTexture(texture); throw new Error("GPU texture upload failed"); }
     return texture;
   }
+  loadStructure(data,detail=false){
+    const gl=this.gl,t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA16UI,data.width,data.height,0,gl.RGBA_INTEGER,gl.UNSIGNED_SHORT,data.pixels);
+    if(gl.getError()!==gl.NO_ERROR){gl.deleteTexture(t);throw new Error("질감 데이터 업로드 실패");}
+    const key=detail?"structureDetailTexture":"structureTexture";gl.deleteTexture(this[key]);this[key]=t;
+  }
+  setOverlay(bitmap){
+    const gl=this.gl;gl.deleteTexture(this.overlayTexture);this.overlayTexture=null;if(!bitmap)return;
+    const t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,bitmap);this.overlayTexture=t;
+  }
   load(data, photo) {
     const next = this.upload(data);
     this.gl.deleteTexture(this.texture); this.texture = next;
+    this.gl.deleteTexture(this.structureTexture);this.structureTexture=null;this.setOverlay(null);
     this.photo = photo; this.width = data.width; this.height = data.height;
     this.clearDetail();
     this.clearMasked();
@@ -142,13 +179,13 @@ export class GpuRenderer {
   }
   clearMasked() {this.gl.deleteTexture(this.maskedTexture);this.maskedTexture=null;this.gl.deleteTexture(this.maskedDetailTexture);this.maskedDetailTexture=null;}
   loadMasked(data) {const next=this.upload(data);this.gl.deleteTexture(this.maskedTexture);this.maskedTexture=next;}
-  clearDetail() { this.gl.deleteTexture(this.detailTexture); this.detailTexture = null;this.gl.deleteTexture(this.maskedDetailTexture);this.maskedDetailTexture=null; }
+  clearDetail() {this.gl.deleteTexture(this.structureDetailTexture);this.structureDetailTexture=null; this.gl.deleteTexture(this.detailTexture); this.detailTexture = null;this.gl.deleteTexture(this.maskedDetailTexture);this.maskedDetailTexture=null; }
   loadDetail(data,masked=null) {
     const texture = this.upload(data);
     this.clearDetail(); this.detailTexture = texture; this.detailOrigin = [data.x, data.y];
     if (masked) this.maskedDetailTexture=this.upload(masked);
   }
-  draw(settings, view, { before = false, split = false, splitPosition = .5, histogram = false, geometry = null } = {}) {
+  draw(settings, view, { before = false, split = false, splitPosition = .5, histogram = false, geometry = null, overlay=false } = {}) {
     if (!this.texture) return;
     const gl = this.gl, u = this.locations;
     const width = histogram ? this.target.width : this.canvas.width, height = histogram ? this.target.height : this.canvas.height;
@@ -157,6 +194,12 @@ export class GpuRenderer {
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D,this.detailTexture || this.texture);
     gl.activeTexture(gl.TEXTURE2);gl.bindTexture(gl.TEXTURE_2D,this.maskedTexture || this.texture);
     gl.activeTexture(gl.TEXTURE3);gl.bindTexture(gl.TEXTURE_2D,this.maskedDetailTexture || this.detailTexture || this.texture);
+    gl.activeTexture(gl.TEXTURE4);gl.bindTexture(gl.TEXTURE_2D,this.structureTexture||this.texture);
+    gl.activeTexture(gl.TEXTURE5);gl.bindTexture(gl.TEXTURE_2D,this.structureDetailTexture||this.structureTexture||this.texture);
+    // A normalized sampler must be bound to a normalized texture, even with the branch off.
+    gl.activeTexture(gl.TEXTURE6);if(!this.emptyOverlay){this.emptyOverlay=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,this.emptyOverlay);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array(4));gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);}
+    gl.activeTexture(gl.TEXTURE6);gl.bindTexture(gl.TEXTURE_2D,this.overlayTexture||this.emptyOverlay);
+    gl.uniform1i(u.hasStructure,Boolean(this.structureTexture));gl.uniform1i(u.hasStructureDetail,Boolean(this.structureDetailTexture));gl.uniform1i(u.showOverlay,Boolean(overlay&&this.overlayTexture));gl.uniform3f(u.structureAmount,settings.dehaze||0,settings.clarity||0,settings.texture||0);
     gl.uniform1i(u.hasMaskedSource,Boolean(this.maskedTexture));gl.uniform1i(u.hasMaskedDetail,Boolean(this.maskedDetailTexture));
     gl.uniform1i(u.geometryEnabled,Boolean(geometry));
     if(geometry){
@@ -213,7 +256,7 @@ export class GpuRenderer {
   }
   dispose() {
     const gl=this.gl;gl.useProgram(null);gl.bindBuffer(gl.ARRAY_BUFFER,null);gl.bindFramebuffer(gl.FRAMEBUFFER,null);
-    this.clearDetail();this.clearMasked();gl.deleteTexture(this.texture);
+    this.clearDetail();this.clearMasked();gl.deleteTexture(this.texture);gl.deleteTexture(this.structureTexture);gl.deleteTexture(this.overlayTexture);gl.deleteTexture(this.emptyOverlay);
     if (this.target) {gl.deleteFramebuffer(this.target.framebuffer);gl.deleteTexture(this.target.texture);}
     gl.deleteBuffer(this.buffer);gl.deleteProgram(this.program);
     this.texture=null;this.target=null;

@@ -83,12 +83,16 @@ def stress(browser,args):
     page.goto(args.url);page.evaluate("document.querySelectorAll('details.category').forEach(e=>e.open=true)");cdp=page.context.new_cdp_session(page);measurements=[]
     for i in range(args.iterations+3):
         photo=load(page,args.nef)
+        page.wait_for_function("document.getElementById('preview').dataset.structureReady==='true'",timeout=60000)
+        for key,value in [('dehaze','20'),('clarity','30'),('texture','40')]:
+            page.locator('#'+key).fill(value);page.locator('#'+key).dispatch_event('input');page.locator('#'+key).dispatch_event('change')
         page.locator("#mask-kind").select_option("gradient");page.locator("#mask-add").click()
         page.locator("#local-exposure").fill("0.5");page.locator("#local-exposure").dispatch_event("input");page.locator("#local-exposure").dispatch_event("change")
         page.wait_for_function("!document.getElementById('export').disabled && document.getElementById('status').textContent.includes('완료')",timeout=60000)
         page.wait_for_function("Number(document.getElementById('histogram').dataset.count)>0",timeout=60000)
-        response=page.request.post(f"{args.url}/api/photos/{photo['id']}/export?long_edge=2000&dpi=300",data={"masks":[{"kind":"gradient","adjustments":{"exposure":.5}}]})
+        response=page.request.post(f"{args.url}/api/photos/{photo['id']}/export?long_edge=2000&dpi=300",data={"dehaze":20,"clarity":30,"texture":40,"masks":[{"kind":"gradient","adjustments":{"exposure":.5}}]})
         assert response.status==200;response.dispose()
+        page.wait_for_load_state("networkidle")
         cdp.send("HeapProfiler.collectGarbage")
         memory=cdp.send("Runtime.getHeapUsage")
         counts=page.evaluate("Object.fromEntries(Object.entries(resources).map(([k,v])=>[k,v.size]))")

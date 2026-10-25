@@ -7,6 +7,7 @@ import rawpy
 from PIL import Image, ImageCms
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .curves import curve_lut
+from . import structure
 from .masking import Mask, bake_masks
 from .geometry import Geometry,apply_geometry
 from .raw_support import compatible_develop
@@ -20,6 +21,9 @@ class Adjustments(BaseModel):
     shadows: float = Field(default=0, ge=-100, le=100)
     temperature: float = Field(default=0, ge=-100, le=100)
     tint: float = Field(default=0, ge=-100, le=100)
+    dehaze: float = Field(default=0,ge=-100,le=100)
+    clarity: float = Field(default=0,ge=-100,le=100)
+    texture: float = Field(default=0,ge=-100,le=100)
     saturation: float = Field(default=0, ge=-100, le=100)
     monochrome: bool = False
     mix_red: float = Field(default=30, ge=0, le=200)
@@ -94,9 +98,10 @@ def _develop_native(path: Path, *, preview: bool, metadata: dict | None = None) 
     return resize_preview(rgb) if preview else rgb
 
 
-def render(rgb: np.ndarray, settings: Adjustments, *, origin=(0, 0), pixel_scale=(1, 1), full_size=None) -> Image.Image:
+def render(rgb: np.ndarray, settings: Adjustments, *, origin=(0, 0), pixel_scale=(1, 1), full_size=None, structure_source=None) -> Image.Image:
     """Shared preview/export pipeline; process strips to bound temporary memory."""
     full_size=full_size or (round(rgb.shape[1]*pixel_scale[0]),round(rgb.shape[0]*pixel_scale[1]))
+    spatial=structure.prepare(rgb,full_size=full_size,pixel_scale=pixel_scale,origin=origin,source=structure_source) if settings.dehaze or settings.clarity or settings.texture else None
     result = np.empty(rgb.shape, dtype=np.uint8)
     warmth = settings.temperature / 100
     tint = settings.tint / 100
@@ -117,6 +122,9 @@ def render(rgb: np.ndarray, settings: Adjustments, *, origin=(0, 0), pixel_scale
         # Display-referred controls after the linear-light exposure/WB operations.
         x = np.clip(x, 0, 1)
         x = np.where(x <= 0.0031308, x * 12.92, 1.055 * np.power(x, 1 / 2.4) - 0.055)
+        if spatial is not None:
+            f=structure.fields(spatial,row,rgb.shape[1],len(x),origin=origin,pixel_scale=pixel_scale)
+            x=structure.apply(x,f,settings.dehaze,settings.clarity,settings.texture)
         x = (x - 0.5) * (2 ** (settings.contrast / 100)) + 0.5
         if not identity:
             position=np.clip(x,0,1)*255
@@ -148,9 +156,9 @@ def render(rgb: np.ndarray, settings: Adjustments, *, origin=(0, 0), pixel_scale
     return Image.fromarray(result)
 
 
-def jpeg(rgb: np.ndarray, settings: Adjustments, *, quality: int, origin=(0,0), pixel_scale=(1,1), full_size=None,long_edge=0,dpi=300,geometry=True) -> bytes:
+def jpeg(rgb: np.ndarray, settings: Adjustments, *, quality: int, origin=(0,0), pixel_scale=(1,1), full_size=None,long_edge=0,dpi=300,geometry=True,structure_source=None) -> bytes:
     output = BytesIO()
-    image=render(rgb, settings, origin=origin, pixel_scale=pixel_scale,full_size=full_size)
+    image=render(rgb, settings, origin=origin, pixel_scale=pixel_scale,full_size=full_size,structure_source=structure_source)
     if geometry:image=apply_geometry(image,settings.geometry)
     if long_edge and max(image.size)>long_edge:
         image.thumbnail((long_edge,long_edge),Image.Resampling.LANCZOS)

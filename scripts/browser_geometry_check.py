@@ -27,7 +27,7 @@ def check(browser,args,cpu=False):
     page.locator('#geo-rotation').fill('2');page.locator('#geo-rotation').dispatch_event('input');page.locator('#geo-rotation').dispatch_event('change');ready()
     page.locator('#undo').click();ready();assert page.locator('#geo-rotation').input_value()=='0'
     page.locator('#redo').click();ready();assert page.locator('#geo-rotation').input_value()=='2'
-    assert page.locator('#mask-add').is_disabled()
+    assert not page.locator('#mask-add').is_disabled()
     page.locator('#geometry-source').check();assert not page.locator('#mask-add').is_disabled()
     page.locator('#mask-kind').select_option('luminance');page.locator('#mask-add').click()
     page.locator('#local-exposure').fill('0.1');page.locator('#local-exposure').dispatch_event('input');page.locator('#local-exposure').dispatch_event('change')

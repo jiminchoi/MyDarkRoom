@@ -12,6 +12,7 @@ from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from darkroom.imaging import Adjustments, render
+from darkroom.structure import packed
 
 
 def shader_checks(page):
@@ -28,10 +29,13 @@ def shader_checks(page):
              {"curve_black":5,"curve_shadow":18,"curve_mid":60,"curve_light":85,"curve_white":95,"saturation":20},
              {"curve_mid":65,"curve_light":85,"monochrome":True,"grain":35},
              {"curve_points":[[0,.03],[.1,.05],[.2,.15],[.3,.26],[.4,.43],[.5,.62],[.6,.73],[.7,.8],[.8,.85],[.9,.92],[1,.98]],"saturation":15},
-             {"curve_points":[[0,0],[.3,.7],[.6,.4],[1,1]],"monochrome":True}]
+             {"curve_points":[[0,0],[.3,.7],[.6,.4],[1,1]],"monochrome":True},
+             {"dehaze":100,"clarity":100,"texture":100},
+             {"dehaze":-100,"clarity":-100,"texture":-100},
+             {"dehaze":40,"clarity":-30,"texture":65,"exposure":.4,"temperature":-20}]
     for case in cases:
         settings = Adjustments(**case)
-        result = page.evaluate("""async ({rgb,settings}) => {
+        result = page.evaluate("""async ({rgb,settings,fields}) => {
           const {GpuRenderer}=await import('/static/gpu.js');
           if (!window.checkRenderer) {
             const canvas=document.createElement('canvas'); canvas.width=5;canvas.height=4;
@@ -39,9 +43,10 @@ def shader_checks(page):
           }
           const renderer=window.checkRenderer;
           renderer.load({width:5,height:4,pixels:new Uint16Array(rgb)},{width:5,height:4});
+          renderer.loadStructure({width:5,height:4,pixels:new Uint16Array(fields)});
           const pixels=renderer.histogram(settings,{scale:1,offset:[0,0],origin:[0,0]});
           return [...pixels];
-        }""", {"rgb": rgb.ravel().tolist(), "settings": settings.model_dump()})
+        }""", {"rgb": rgb.ravel().tolist(), "settings": settings.model_dump(),"fields":packed(rgb,full_size=(5,4)).ravel().tolist()})
         # readPixels starts at the bottom; ndarray RGB starts at the top.
         actual = np.array(result, dtype=np.uint8).reshape(4, 5, 4)[::-1, :, :3]
         expected = np.asarray(render(rgb, settings))

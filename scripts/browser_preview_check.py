@@ -98,7 +98,7 @@ def workflow(browser,args,cpu=False):
         assert page.evaluate("Object.fromEntries(Object.entries(liveGL).map(([k,v])=>[k,v.size]))")==counts
         print('GPU: 8 curve moves, deferred histogram and stable GPU objects; zero JPEG preview requests',flush=True)
     # Original/source mode is still required for mask editing in this release.
-    assert page.locator('#mask-add').is_disabled()
+    assert not page.locator('#mask-add').is_disabled()
     page.locator('#geometry-source').check();assert not page.locator('#mask-add').is_disabled()
     page.locator('#geometry-source').uncheck();ready()
     # User panel choices persist across reloads after the one-time default migration.

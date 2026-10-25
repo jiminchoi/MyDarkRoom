@@ -16,9 +16,27 @@ class Point(Model):
     y: float = Field(ge=0, le=1)
 
 
+def validate_transform(matrix):
+    if matrix is not None:
+        m=np.asarray(matrix).reshape(3,3)
+        if not np.all(np.isfinite(m)) or np.max(np.abs(m))>20 or abs(np.linalg.det(m))<1e-6:raise ValueError("Invalid mask transform")
+
+
+def map_points(matrix,xx,yy):
+    if matrix is None:return xx,yy,1
+    m=np.asarray(matrix).reshape(3,3);z=m[2,0]*xx+m[2,1]*yy+m[2,2]
+    return (m[0,0]*xx+m[0,1]*yy+m[0,2])/np.maximum(z,1e-8),(m[1,0]*xx+m[1,1]*yy+m[1,2])/np.maximum(z,1e-8),z
+
+
 class Stroke(Model):
+    transform: list[float] | None = Field(default=None,min_length=9,max_length=9)
+
+    @model_validator(mode="after")
+    def validate_space(self):
+        validate_transform(self.transform);return self
+
     points: list[Point] = Field(min_length=1, max_length=256)
-    radius: float = Field(default=.04, ge=.002, le=.25)
+    radius: float = Field(default=.04, ge=.00001, le=.25)
     feather: float = Field(default=.6, ge=0, le=1)
     erase: bool = False
 
@@ -34,6 +52,7 @@ class LocalAdjustments(Model):
 
 
 class Mask(Model):
+    transform: list[float] | None = Field(default=None,min_length=9,max_length=9)
     name: str = Field(default="마스크", max_length=60)
     kind: Literal["brush", "gradient", "radial", "color", "luminance"]
     enabled: bool = True
@@ -52,6 +71,7 @@ class Mask(Model):
 
     @model_validator(mode="after")
     def validate_ranges(self):
+        validate_transform(self.transform)
         if self.low > self.high or any(not 0 <= v <= 1 for v in self.color):
             raise ValueError("Invalid mask range/color")
         if self.density is not None and any(not 0<=v<=1 for v in self.density):
@@ -80,18 +100,25 @@ def brush_grid(serialized: str, width: int, height: int):
         for a,b in zip(points,points[1:] or points):
             ax,ay=a["x"]*width,a["y"]*height
             bx,by=b["x"]*width,b["y"]*height
-            x0=max(0,int((min(ax,bx)-radius)/width*w)-1)
-            x1=min(w,int((max(ax,bx)+radius)/width*w)+2)
-            y0=max(0,int((min(ay,by)-radius)/height*h)-1)
-            y1=min(h,int((max(ay,by)+radius)/height*h)+2)
+            bounds=[min(ax,bx)-radius,max(ax,bx)+radius,min(ay,by)-radius,max(ay,by)+radius]
+            if stroke.get("transform"):
+                inv=np.linalg.inv(np.asarray(stroke['transform']).reshape(3,3));u=np.array([bounds[0],bounds[1],bounds[1],bounds[0]])/width;v=np.array([bounds[2],bounds[2],bounds[3],bounds[3]])/height
+                u,v,z=map_points(inv.ravel(),u,v)
+                bounds=[float(u.min()*width),float(u.max()*width),float(v.min()*height),float(v.max()*height)] if np.all(z>0) else [0,width,0,height]
+            x0=max(0,int(bounds[0]/width*w)-1)
+            x1=min(w,int(bounds[1]/width*w)+2)
+            y0=max(0,int(bounds[2]/height*h)-1)
+            y1=min(h,int(bounds[3]/height*h)+2)
             if x1<=x0 or y1<=y0:
                 continue
             xx=(np.arange(x0,x1,dtype=np.float32)[None,:]+.5)/w*width
             yy=(np.arange(y0,y1,dtype=np.float32)[:,None]+.5)/h*height
+            xx,yy,z=map_points(stroke.get("transform"),xx/width,yy/height);xx=xx*width;yy=yy*height
             dx,dy=bx-ax,by-ay
             t=np.clip(((xx-ax)*dx+(yy-ay)*dy)/max(dx*dx+dy*dy,1e-12),0,1)
             distance=np.sqrt((xx-ax-t*dx)**2+(yy-ay-t*dy)**2)
             weight=(distance<=radius).astype(np.float32) if not stroke["feather"] else 1-ramp(radius*(1-stroke["feather"]),radius,distance)
+            weight=np.where(np.asarray(z)>0,weight,0)
             field[y0:y1,x0:x1]=np.maximum(field[y0:y1,x0:x1],weight)
         result = result*(1-field) if stroke["erase"] else np.maximum(result,field)
     return result
@@ -127,6 +154,7 @@ def mask_weight(mask: Mask, original, xx, yy, full_size):
         weight=sample_grid(brush_grid(serialized,*full_size),xx,yy)
     elif mask.kind in ("gradient","radial"):
         width,height=full_size
+        xx,yy,z=map_points(mask.transform,xx,yy)
         ax,ay=mask.start.x*width,mask.start.y*height
         dx,dy=(mask.end.x-mask.start.x)*width,(mask.end.y-mask.start.y)*height
         if mask.kind=="radial":
@@ -134,7 +162,7 @@ def mask_weight(mask: Mask, original, xx, yy, full_size):
             t=np.sqrt((xx*width-ax)**2+(yy*height-ay)**2)/radius
         else:
             t=((xx*width-ax)*dx+(yy*height-ay)*dy)/max(dx*dx+dy*dy,1e-12)
-        weight=gradient_density(t,mask)
+        weight=np.where(np.asarray(z)>0,gradient_density(t,mask),0)
     else:
         display=np.clip(original,0,1)
         display=np.where(display<=.0031308,display*12.92,1.055*display**(1/2.4)-.055)

@@ -13,7 +13,7 @@ export class GeometryEditor {
       <label class="check-label"><input id="geometry-auto-crop" type="checkbox" checked> 각도·원근 변경 시 원본 비율 자동 크롭</label>
       <label>크롭 비율 <select id="crop-ratio"><option value="free">자유</option><option value="original">원본 비율</option><option value="1">1:1</option><option value="1.5">3:2</option><option value="1.3333333333">4:3</option><option value="1.7777777778">16:9</option><option value=".6666666667">2:3</option><option value=".75">3:4</option><option value=".5625">9:16</option></select></label>
       <div class="geometry-row"><button id="crop-edit">크롭 편집</button><button id="crop-full">크롭 해제</button><button id="geometry-reset">기하 초기화</button></div>
-      <label class="check-label"><input id="geometry-source" type="checkbox"> 원본 좌표 보기 · 마스크 편집</label>
+      <label class="check-label"><input id="geometry-source" type="checkbox"> 원본 좌표 보기</label>
       <small id="geometry-message">크롭 편집 후 사진을 드래그해 영역을 선택하세요.</small></fieldset>`;
     for (const key of ["rotation","vertical","horizontal"]) {
       const input=$("geo-"+key);input.oninput=()=>{const previous=this.value;this.data[key]=Number(input.value);if(!this.fitCrop()){this.data=previous;this.sync();return;}$(key+"-value").textContent=input.value;this.paused=false;$("geometry-source").checked=false;this.onChange(false);};input.onchange=()=>this.onChange(true);
