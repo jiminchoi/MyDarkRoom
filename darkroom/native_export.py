@@ -40,10 +40,20 @@ class NativeApi:
         url=self._window.get_current_url() if self._window else None
         if url not in (self._runtime.url,self._runtime.url+'/') or self._runtime.closing:raise PermissionError('편집 화면에서만 저장할 수 있습니다.')
 
+    def _dialog(self,*args,**kwargs):
+        # pywebview API calls run on worker threads; Windows OLE dialogs need STA.
+        native=getattr(self._window,'native',None)
+        if native is not None and native.InvokeRequired:
+            from System import Action
+            result=[]
+            native.Invoke(Action(lambda:result.append(self._window.create_file_dialog(*args,**kwargs))))
+            return result[0]
+        return self._window.create_file_dialog(*args,**kwargs)
+
     def choose_output(self):
         self._trusted()
         import webview
-        selected=self._window.create_file_dialog(webview.FileDialog.FOLDER)
+        selected=self._dialog(webview.FileDialog.FOLDER)
         if not selected:return None
         path=Path(selected[0]).resolve()
         if not path.is_dir():raise ValueError('폴더를 선택해 주세요.')
@@ -61,7 +71,7 @@ class NativeApi:
             target=None
             if directory is None:
                 import webview
-                selected=self._window.create_file_dialog(webview.FileDialog.SAVE,save_filename=name,file_types=('JPEG image (*.jpg;*.jpeg)',))
+                selected=self._dialog(webview.FileDialog.SAVE,save_filename=name,file_types=('JPEG image (*.jpg;*.jpeg)',))
                 if not selected:return {'cancelled':True}
                 target=Path(selected[0]).resolve()
                 if target.suffix.lower() not in ('.jpg','.jpeg'):target=target.with_name(target.name+'.jpg')
