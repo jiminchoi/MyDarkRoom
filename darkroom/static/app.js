@@ -399,6 +399,10 @@ const exportDialog=new ExportDialog(()=>{if(!photo)return null;const c=geometryE
   if (!photo || opening || exporting || maskBusy) return;
   compare(false);exporting=true;availability();busy("원본 해상도로 현상하고 JPEG를 만들고 있어요…");
   try {
+    if(window.pywebview?.api?.export_jpeg){
+      const result=await window.pywebview.api.export_jpeg(photo.id,settings(),{filename:options.filename,longEdge:options.longEdge,dpi:options.dpi,quality:options.quality,directory_token:options.directory?.native_token||null});
+      status(result.cancelled?"저장을 취소했어요":`저장 완료 · ${result.folder} / ${result.filename}`);return;
+    }
     const response=await postImage(photo.id,`export?long_edge=${options.longEdge}&dpi=${options.dpi}&quality=${options.quality}`,settings());
     const blob=await response.blob();
     if (options.directory) {
@@ -687,8 +691,8 @@ $("auto-light").onclick=async()=>{
 // Categories have stable DOM controls, keeping disabled states and preset semantics.
 function category(element,title,key){
  const details=document.createElement("details"),summary=document.createElement("summary");details.className="category";details.dataset.category=key;summary.textContent=title;
- try{const saved=localStorage.getItem("mydarkroom.category.v2."+key);details.open=saved===null?key==="빛":saved==="open";}catch{details.open=key==="빛";}
- element.before(details);details.append(summary,element);details.addEventListener("toggle",()=>{try{localStorage.setItem("mydarkroom.category.v2."+key,details.open?"open":"closed");}catch{}});
+ details.open=key==="빛";
+ element.before(details);details.append(summary,element);
  return details;
 }
 category($("preset-tools"),"프리셋","presets");

@@ -1,3 +1,10 @@
 -r requirements.lock
 pyinstaller==6.22.3
 pyinstaller-hooks-contrib==2026.9
+pywebview==6.2.1; sys_platform == "win32"
+pythonnet==3.2.1; sys_platform == "win32"
+clr-loader==0.3.1; sys_platform == "win32"
+bottle==0.13.4; sys_platform == "win32"
+proxy-tools==0.1.0; sys_platform == "win32"
+cffi==2.1.1; sys_platform == "win32"
+pycparser==3.12; sys_platform == "win32"

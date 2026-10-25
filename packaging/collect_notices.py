@@ -8,7 +8,7 @@ target=Path(sys.argv[1]);licenses=target/"licenses";licenses.mkdir(exist_ok=True
 lines=["MyDarkRoom bundled third-party components", "", "Python: "+sys.version, ""]
 for dist in sorted(distributions(),key=lambda d:d.metadata.get("Name","").lower()):
     name=dist.metadata.get("Name","unknown")
-    if name.lower() in {"pip","setuptools","pytest","pygments","iniconfig","pluggy","pyinstaller","pyinstaller-hooks-contrib","altgraph","pefile","pywin32-ctypes"}:continue
+    if name.lower() in {"pip","setuptools","pytest","pygments","iniconfig","pluggy","pyinstaller-hooks-contrib","altgraph","pefile","pywin32-ctypes","playwright","pyee","greenlet"}:continue
     lines+=[f"{name} {dist.version}",dist.metadata.get("License-Expression") or dist.metadata.get("License", "See bundled license files"),*dist.metadata.get_all("Project-URL",[]),""]
     for file in dist.files or []:
         if any(word in str(file).lower() for word in ["license","copying","notice"]) and ".." not in file.parts:

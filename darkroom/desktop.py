@@ -147,6 +147,7 @@ class Runtime:
         self.port=self.socket.getsockname()[1];self.url=f"http://127.0.0.1:{self.port}"
         self.token=secrets.token_urlsafe(32);self.commands=queue.SimpleQueue()
         self.finished=threading.Event();self.closing=False;self.server=None;self.failure=None
+        self.native_lock=threading.Lock();self._stop_thread=None
         self.thread=threading.Thread(target=self._serve,name="MyDarkRoom-engine",daemon=True)
 
     def start(self):
@@ -163,6 +164,7 @@ class Runtime:
             import uvicorn
             from fastapi import HTTPException,Request as ApiRequest
             from .app import app
+            self.app=app
             runtime=self
 
             def authorized(request):
@@ -188,7 +190,12 @@ class Runtime:
 
     def stop(self):
         self.closing=True
-        if self.server:self.server.should_exit=True
+        if self._stop_thread is None:
+            def after_exports():
+                with self.native_lock:
+                    if self.server:self.server.should_exit=True
+            self._stop_thread=threading.Thread(target=after_exports,daemon=True,name='MyDarkRoom-shutdown')
+            self._stop_thread.start()
 
     def cleanup(self):
         state=self.directory/"instance.json"
@@ -221,6 +228,7 @@ def main(argv=None):
     parser.add_argument("--port",type=int,choices=range(0,65536),metavar="PORT")
     parser.add_argument("--headless",action="store_true",help="Diagnostic mode without the launcher window")
     parser.add_argument("--no-browser",action="store_true",help="Do not open a browser automatically")
+    parser.add_argument("--webview-debug-port",type=int,default=None,help=argparse.SUPPRESS)
     args=parser.parse_args(argv)
     for name in ["OMP_NUM_THREADS","OPENBLAS_NUM_THREADS","MKL_NUM_THREADS"]:os.environ.setdefault(name,"4")
     directory=args.data_dir.expanduser().resolve();directory.mkdir(parents=True,exist_ok=True)
@@ -237,11 +245,11 @@ def main(argv=None):
         if args.headless:
             runtime.start();return headless(runtime,not args.no_browser)
         from .desktop_ui import Launcher
-        ui=Launcher(runtime,auto_open=not args.no_browser)
+        ui=Launcher(runtime,debug_port=args.webview_debug_port)
         runtime.start();ui.run();return 1 if runtime.failure else 0
-    except BaseException:
+    except BaseException as exc:
         LOG.exception("Launcher failed")
-        show_error(f"MyDarkRoom을 시작하지 못했습니다.\n로그: {directory/'logs'/'MyDarkRoom.log'}")
+        show_error(f"MyDarkRoom을 시작하지 못했습니다.\n{exc}\n로그: {directory/'logs'/'MyDarkRoom.log'}")
         return 1
     finally:
         if runtime:

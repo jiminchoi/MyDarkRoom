@@ -6,13 +6,16 @@ export class ExportDialog {
     const note=document.createElement("p");note.id="export-error";note.setAttribute("role","alert");$("export-dialog").append(note);
     for (const size of ["original","small","custom"]) $("size-"+size).onclick=()=>{this.size=size;this.update();};
     $("export-edge").oninput=()=>this.update();
-    if (!window.showDirectoryPicker) {
-      $("choose-output").disabled=true;
-      $("folder-support").textContent="폴더 직접 선택은 Windows Chrome/Edge에서 지원합니다. 이 브라우저에서는 다운로드로 저장합니다.";
-    } else $("folder-support").textContent="폴더를 선택하면 해당 위치에 직접 저장합니다. 같은 이름은 번호를 붙여 보존합니다.";
+    const support=()=>{
+      const native=Boolean(window.pywebview?.api?.choose_output);$("choose-output").disabled=!native&&!window.showDirectoryPicker;
+      $("folder-support").textContent=native||window.showDirectoryPicker?"폴더를 선택하면 해당 위치에 직접 저장합니다. 같은 이름은 번호를 붙여 보존합니다.":"이 브라우저에서는 다운로드로 저장합니다.";
+    };
+    support();window.addEventListener("pywebviewready",support);
     $("choose-output").onclick=async()=>{
-      try {this.directory=await window.showDirectoryPicker({id:"mydarkroom-exports",mode:"readwrite"});$("output-folder").textContent=this.directory.name;note.textContent="";}
-      catch(e) {if (e.name!=="AbortError") note.textContent="폴더를 선택하지 못했습니다: "+e.message;}
+      try {
+        const selected=window.pywebview?.api?.choose_output?await window.pywebview.api.choose_output():await window.showDirectoryPicker({id:"mydarkroom-exports",mode:"readwrite"});
+        if(selected){this.directory=selected;$("output-folder").textContent=selected.name;note.textContent="";}
+      }catch(e){if(e.name!=="AbortError")note.textContent="폴더를 선택하지 못했습니다: "+e.message;}
     };
     $("export-start").onclick=()=>{
       note.textContent="";

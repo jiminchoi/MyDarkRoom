@@ -101,8 +101,8 @@ def workflow(browser,args,cpu=False):
     assert not page.locator('#mask-add').is_disabled()
     page.locator('#geometry-source').check();assert not page.locator('#mask-add').is_disabled()
     page.locator('#geometry-source').uncheck();ready()
-    # User panel choices persist across reloads after the one-time default migration.
-    page.reload();assert page.locator('[data-category="geometry"]').evaluate('e=>e.open')
+    # Each new page starts with only Light open.
+    page.reload();assert not page.locator('[data-category="geometry"]').evaluate('e=>e.open')
     assert not page.locator('[data-category="presets"]').evaluate('e=>e.open')
     assert not errors,errors
     assert page.locator('#error').is_hidden(),page.locator('#error').inner_text()

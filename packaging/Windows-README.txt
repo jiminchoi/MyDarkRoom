@@ -2,8 +2,7 @@ MyDarkRoom - Windows x64
 
 1. ZIP을 전부 압축 해제하세요. ZIP 안에서 바로 실행하지 마세요.
 2. MyDarkRoom.exe를 더블 클릭하세요. Python 설치는 필요 없습니다.
-3. 편집 화면은 Edge/Chrome으로 열립니다. 작은 실행 창의 '종료'로 앱을 끝냅니다.
-   브라우저 탭만 닫아도 실행 창은 유지됩니다. '편집 화면 열기'로 다시 열 수 있습니다.
+3. 편집 화면이 자체 창으로 열립니다. 창의 X 버튼으로 작업을 마친 뒤 앱을 종료합니다.
 4. EXE 옆 _internal 폴더와 파일들을 함께 보관하세요. EXE만 옮기면 실행되지 않습니다.
 5. 업데이트는 새 ZIP을 새 폴더에 전부 풀어서 실행하세요. 구버전 실행 창은 먼저 종료하세요.
 
@@ -20,6 +19,9 @@ https://helpx.adobe.com/camera-raw/using/adobe-dng-converter.html
 실행 데이터/진단 로그:
 %LOCALAPPDATA%\MyDarkRoom\logs\MyDarkRoom.log
 임시 RAW/DNG/원본 캐시는 정상 종료 시 지우고, 중단된 이전 캐시는 다음 실행 시 정리합니다.
+노출을 포함한 빛 패널만 펼친 상태로 시작하고 다른 패널은 접습니다.
+자체 창의 프리셋/설정은 %LOCALAPPDATA%\MyDarkRoom\WebView2에 보관합니다.
+기존 Edge/Chrome의 프리셋은 JSON으로 내보낸 뒤 자체 창에서 불러올 수 있습니다.
 기존 8765 포트를 우선 사용합니다. 포트가 사용 중이면 비어 있는 포트를 선택합니다.
 브라우저별 프리셋/폴더 권한은 브라우저 프로필과 접속 포트에 따라 달라질 수 있습니다.
 보정 중 종료하면 진행 중인 현상/저장을 마친 후 종료하므로 잠시 기다릴 수 있습니다.
@@ -29,5 +31,7 @@ GitHub Releases의 공식 저장소 배포 파일과 SHA256 체크섬을 확인�
 백신이나 Windows 보안을 끌 필요는 없습니다.
 
 실행/오류가 반복되면 '로그 폴더'에서 로그를 확인하세요.
-지원 범위: Windows 10/11 x64, WebGL2를 지원하는 최신 Edge/Chrome.
+지원 범위: Windows 10/11 x64, Microsoft Edge WebView2 Runtime.
+대부분의 Windows에는 이미 설치되어 있습니다. 없는 경우 Microsoft 공식 설치 파일:
+https://go.microsoft.com/fwlink/p/?LinkId=2124703
 Windows ARM64의 네이티브 빌드는 포함하지 않습니다.

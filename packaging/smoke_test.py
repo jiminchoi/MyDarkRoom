@@ -84,8 +84,8 @@ def run(args):
         env["PATH"]=str(Path(env.get("SystemRoot",r"C:\Windows"))/"System32")
         processes=[]
         with httpx.Client(trust_env=False,timeout=120) as client:
-            def start(*extra):
-                process=subprocess.Popen([str(exe),"--no-browser","--data-dir",str(profile),*extra],cwd=work,env=env)
+            def start(*extra,extra_env=None):
+                process=subprocess.Popen([str(exe),"--no-browser","--data-dir",str(profile),*extra],cwd=work,env={**env,**(extra_env or {})})
                 processes.append(process)
                 state,url,elapsed=wait_ready(process,profile,client)
                 return process,state,url,elapsed
@@ -129,11 +129,15 @@ def run(args):
                 port=state['port'];stop(process,state,url)
                 report['checks'] += ['no Python on PATH','Unicode install and profile paths','static files','real NEF and LibRaw DLL','4MP preview','local/global controls and curve','crop/perspective native ROI','JPEG DPI and ICC','single instance','authenticated control','source unchanged','Windows mmap and cache cleanup']
                 if args.gui:
-                    process,state,url,elapsed=start()
+                    with socket.socket() as debug_socket:
+                        debug_socket.bind(('127.0.0.1',0));debug_port=debug_socket.getsockname()[1]
+                    process,state,url,elapsed=start('--webview-debug-port',str(debug_port),extra_env={'WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS':'--enable-unsafe-swiftshader --use-angle=swiftshader'})
                     assert state['port']==port,"Browser origin changed on restart"
                     assert windows_visible_window(process.pid),"Native launcher window missing"
-                    report['restart_ready_seconds']=elapsed;stop(process,state,url)
-                    report['checks'] += ['native Tk launcher','restart and stable origin']
+                    from embedded_smoke import verify
+                    report['restart_ready_seconds']=elapsed
+                    report['checks'] += verify(process,profile,url,debug_port,args.nef,work)
+                    report['checks'] += ['restart and stable origin']
                 with socket.socket() as occupied:
                     occupied.bind(("127.0.0.1",0));occupied.listen();busy=occupied.getsockname()[1]
                     process,state,url,_=start("--headless","--port",str(busy))
