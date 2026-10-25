@@ -1,5 +1,6 @@
 """Native save dialogs; image bytes never travel over the JavaScript bridge."""
 from pathlib import Path
+import logging
 import re
 import secrets
 import tempfile
@@ -41,6 +42,7 @@ class NativeApi:
         if url not in (self._runtime.url,self._runtime.url+'/') or self._runtime.closing:raise PermissionError('편집 화면에서만 저장할 수 있습니다.')
 
     def _dialog(self,*args,**kwargs):
+        logging.getLogger('mydarkroom').info('Opening native file dialog')
         # pywebview API calls run on worker threads; Windows OLE dialogs need STA.
         native=getattr(self._window,'native',None)
         if native is not None and native.InvokeRequired:
@@ -61,6 +63,7 @@ class NativeApi:
         return {'native_token':token,'name':path.name}
 
     def export_jpeg(self,photo_id,settings,options):
+        logging.getLogger('mydarkroom').info('Native JPEG export requested')
         self._trusted()
         from .imaging import Adjustments
         name,values=export_options(options);adjustments=Adjustments.model_validate(settings)

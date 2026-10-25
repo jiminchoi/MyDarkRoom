@@ -51,7 +51,10 @@ def verify(process,profile,url,port,nef,work):
         output=Path(work)/'내장 창 저장.jpg'
         page.locator('#export').click();page.locator('#size-small').click();page.locator('#export-dpi').fill('240');page.locator('#export-name').fill(output.name);page.locator('#export-start').click()
         dialog=Desktop(backend='uia').window(process=process.pid,class_name='#32770')
-        dialog.wait('visible',timeout=30)
+        try:dialog.wait('visible',timeout=30)
+        except Exception as exc:
+            windows=[(w.process_id(),w.class_name(),w.window_text()) for w in Desktop(backend='win32').windows()]
+            raise AssertionError(f"Save dialog missing. Status={page.locator('#status').inner_text()}; error={page.locator('#error').inner_text()}; windows={windows}") from exc
         dialog.child_window(auto_id='1001',control_type='Edit').set_edit_text(str(output))
         dialog.child_window(auto_id='1',control_type='Button').click()
         page.wait_for_function("document.getElementById('status').textContent.includes('저장 완료')",timeout=120000)
