@@ -70,7 +70,7 @@ def windows_visible_window(pid):
 def run(args):
     sample(args.nef)
     report={"version":VERSION,"platform":sys.platform,"checks":[]}
-    with TemporaryDirectory(prefix="mydarkroom-exe-smoke-") as work:
+    with TemporaryDirectory(prefix="mydarkroom-exe-smoke-",ignore_cleanup_errors=True) as work:
         work=Path(work);bundle=work/"배포 폴더 with spaces"/"MyDarkRoom"
         shutil.copytree(args.bundle,bundle)
         exe=bundle/"MyDarkRoom.exe";assert exe.is_file()

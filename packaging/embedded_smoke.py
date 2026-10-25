@@ -17,8 +17,8 @@ def verify(process,profile,url,port,nef,work):
             except Exception:time.sleep(.2)
         assert browser is not None,'WebView2 CDP did not start'
         context=browser.contexts[0]
-        while not context.pages and time.monotonic()<deadline:time.sleep(.1)
-        page=context.pages[0];page.wait_for_url(url+'/',timeout=60000)
+        page=context.pages[0] if context.pages else context.wait_for_event('page',timeout=60000)
+        page.wait_for_url(url+'/',timeout=60000)
         page.on('pageerror',lambda e:errors.append(str(e)))
         page.on('request',lambda r:requests.append(r.url) if '/api/photos/' in r.url else None)
         page.wait_for_function("window.pywebview?.api?.export_jpeg && document.querySelectorAll('details.category').length===9",timeout=60000)
