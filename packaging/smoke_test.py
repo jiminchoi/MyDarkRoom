@@ -83,6 +83,29 @@ def run(args):
         env["PYTHONNOUSERSITE"]="1"
         env["PATH"]=str(Path(env.get("SystemRoot",r"C:\Windows"))/"System32")
         processes=[]
+        # Explorer can propagate an Internet zone from a downloaded ZIP to DLLs.
+        # Reproduce the old bootstrap failure, then keep the marks during real UI tests.
+        managed=[]
+        for name in ['Python.Runtime.dll','Microsoft.Web.WebView2.Core.dll','Microsoft.Web.WebView2.WinForms.dll']:
+            paths=list(bundle.rglob(name));assert paths,f'Missing managed assembly: {name}'
+            managed+=paths
+        for dll in managed:
+            Path(str(dll)+':Zone.Identifier').write_text('[ZoneTransfer]\nZoneId=3\n',encoding='ascii')
+        config=bundle/'MyDarkRoom.exe.config';assert config.is_file()
+        disabled=config.with_suffix('.config.disabled');config.rename(disabled)
+        baseline_report=work/'blocked-baseline.json'
+        try:
+            baseline=subprocess.run([str(exe),'--check-ui-runtime',str(baseline_report),'--data-dir',str(profile)],env=env,cwd=work,timeout=30)
+        finally:disabled.rename(config)
+        baseline_result=json.loads(baseline_report.read_text(encoding='utf-8'))
+        assert baseline.returncode==1 and 'Failed to resolve Python.Runtime.Loader.Initialize' in baseline_result.get('error',''),baseline_result
+        fixed_report=work/'fixed-runtime.json'
+        fixed=subprocess.run([str(exe),'--check-ui-runtime',str(fixed_report),'--data-dir',str(profile)],env=env,cwd=work,timeout=30)
+        fixed_result=json.loads(fixed_report.read_text(encoding='utf-8'))
+        assert fixed.returncode==0 and fixed_result['passed'],fixed_result
+        assert fixed_result['assembly_zone']==3,'Test must retain the download mark'
+        report['checks']+=['Internet-marked DLL bootstrap failure reproduced without app config','Internet-marked Python.NET and WebView2 assemblies load with app config','download marks retained without unblocking Windows files']
+        report['native_runtime']=fixed_result
         with httpx.Client(trust_env=False,timeout=120) as client:
             def start(*extra,extra_env=None):
                 process=subprocess.Popen([str(exe),"--no-browser","--data-dir",str(profile),*extra],cwd=work,env={**env,**(extra_env or {})})

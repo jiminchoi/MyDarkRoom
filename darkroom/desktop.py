@@ -229,9 +229,14 @@ def main(argv=None):
     parser.add_argument("--headless",action="store_true",help="Diagnostic mode without the launcher window")
     parser.add_argument("--no-browser",action="store_true",help="Do not open a browser automatically")
     parser.add_argument("--webview-debug-port",type=int,default=None,help=argparse.SUPPRESS)
+    parser.add_argument("--check-ui-runtime",type=Path,help=argparse.SUPPRESS)
     args=parser.parse_args(argv)
     for name in ["OMP_NUM_THREADS","OPENBLAS_NUM_THREADS","MKL_NUM_THREADS"]:os.environ.setdefault(name,"4")
     directory=args.data_dir.expanduser().resolve();directory.mkdir(parents=True,exist_ok=True)
+    if args.check_ui_runtime is not None:
+        configure_logs(directory)
+        from .native_runtime import probe
+        return probe(args.check_ui_runtime)
     lock=InstanceLock(directory)
     if not lock.acquire():
         if activate_existing(directory):return 0

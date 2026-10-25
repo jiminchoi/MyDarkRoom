@@ -64,4 +64,6 @@ class Launcher:
             self.runtime.finished.wait(200);self.window.destroy()
 
     def run(self):
+        from .native_runtime import initialize
+        initialize()
         self.webview.start(self.monitor,gui='edgechromium',debug=False,private_mode=False,storage_path=str(self.runtime.directory/'WebView2'))

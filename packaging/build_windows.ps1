@@ -18,6 +18,7 @@ if ($LASTEXITCODE) {
     throw 'EXE build failed. See the packaging error annotation.'
 }
 Copy-Item packaging/Windows-README.txt dist/MyDarkRoom/README-Windows.txt
+Copy-Item packaging/MyDarkRoom.exe.config dist/MyDarkRoom/MyDarkRoom.exe.config
 python packaging/collect_notices.py dist/MyDarkRoom
 if ($LASTEXITCODE) { throw 'License collection failed.' }
 Write-Host 'Built dist/MyDarkRoom/MyDarkRoom.exe. Smoke-test the whole folder before packaging.'

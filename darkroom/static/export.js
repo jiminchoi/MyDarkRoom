@@ -8,6 +8,7 @@ export class ExportDialog {
     $("export-edge").oninput=()=>this.update();
     const support=()=>{
       const native=Boolean(window.pywebview?.api?.choose_output);$("choose-output").disabled=!native&&!window.showDirectoryPicker;
+      if(native&&!this.directory)$("output-folder").textContent="저장할 때 위치 선택";
       $("folder-support").textContent=native||window.showDirectoryPicker?"폴더를 선택하면 해당 위치에 직접 저장합니다. 같은 이름은 번호를 붙여 보존합니다.":"이 브라우저에서는 다운로드로 저장합니다.";
     };
     support();window.addEventListener("pywebviewready",support);
