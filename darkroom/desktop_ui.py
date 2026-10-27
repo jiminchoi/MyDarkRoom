@@ -67,7 +67,7 @@ class Launcher:
             if self.webview.renderer!='edgechromium':raise RuntimeError('WebView2 renderer did not initialize')
             while not self.runtime.finished.wait(.1):
                 if self.runtime.ready and not self.loaded and not self.runtime.closing:
-                    self.loaded=True;self.window.load_url(self.runtime.url)
+                    self.loaded=True;self.window.load_url(self.runtime.editor_url)
                 while not self.runtime.commands.empty():
                     command=self.runtime.commands.get()
                     if command=='shutdown':self.close()

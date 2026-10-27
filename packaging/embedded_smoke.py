@@ -5,6 +5,8 @@ import time
 
 from PIL import Image
 from playwright.sync_api import sync_playwright
+from darkroom.version import VERSION,editor_url
+from upgrade_smoke import verify_upgrade
 
 
 def verify(process,profile,url,port,nef,work):
@@ -18,7 +20,9 @@ def verify(process,profile,url,port,nef,work):
         assert browser is not None,'WebView2 CDP did not start'
         context=browser.contexts[0]
         page=context.pages[0] if context.pages else context.wait_for_event('page',timeout=60000)
-        page.wait_for_url(url+'/',timeout=60000)
+        page.wait_for_url(editor_url(url),timeout=60000)
+        upgrade_checks=verify_upgrade(page,url,VERSION)
+        page.goto(editor_url(url))
         page.on('pageerror',lambda e:errors.append(str(e)))
         page.on('request',lambda r:requests.append(r.url) if '/api/photos/' in r.url else None)
         page.wait_for_function("window.pywebview?.api?.export_jpeg && document.querySelectorAll('details.category').length===9",timeout=60000)
@@ -102,4 +106,4 @@ def verify(process,profile,url,port,nef,work):
         assert not (profile/'instance.json').exists() and not list((profile/'cache').glob('mydarkroom-*'))
         closed=json.loads(stored[0].read_text(encoding='utf-8'))
         assert closed['settings']['exposure']==.57 and closed['settings']['masks']==saved['settings']['masks']
-    return ['embedded WebView2 page and JS bridge','Light-only startup with stale saved panels','WebGL2 renderer','native file input NEF upload','crop and 200% zoom/pan','cached local spatial sliders without requests','real native Save As JPEG/DPI/ICC','native window close and engine/cache cleanup','persistent embedded profile','photo edit auto-save outside disposable cache','renamed NEF restores geometry and local spatial masks','dirty native close flushes edits before engine shutdown']
+    return upgrade_checks+['embedded WebView2 page and JS bridge','Light-only startup with stale saved panels','WebGL2 renderer','native file input NEF upload','crop and 200% zoom/pan','cached local spatial sliders without requests','real native Save As JPEG/DPI/ICC','native window close and engine/cache cleanup','persistent embedded profile','photo edit auto-save outside disposable cache','renamed NEF restores geometry and local spatial masks','dirty native close flushes edits before engine shutdown']

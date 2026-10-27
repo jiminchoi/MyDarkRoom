@@ -14,7 +14,7 @@ from PIL import Image
 import numpy as np
 import rawpy
 from fastapi import FastAPI, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
@@ -184,14 +184,17 @@ async def local_requests(request: Request, call_next):
         return Response("Cross-origin requests are disabled", status_code=403)
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
-    if request.url.path.startswith("/api/"):
+    if request.url.path == "/" or request.url.path.startswith(("/api/", "/static/")):
         response.headers["Cache-Control"] = "no-store"
     return response
 
 
 @app.get("/")
 def index():
-    return FileResponse(STATIC / "index.html")
+    # Relative module imports inherit this versioned directory, including GPU,
+    # masks and edit-save.js. Old, already-fresh caches must never be consulted.
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    return HTMLResponse(html.replace("/static/", f"/static/{VERSION}/"))
 
 
 @app.get("/api/health")
@@ -368,6 +371,7 @@ def detail_cpu(photo_id: str, settings: Adjustments, request: Request,
     return Response(data, media_type="image/jpeg", headers=headers)
 
 
+app.mount(f"/static/{VERSION}", StaticFiles(directory=STATIC), name="versioned-static")
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 @app.post("/api/photos/{photo_id}/auto-geometry")

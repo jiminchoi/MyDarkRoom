@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from darkroom.app import app, Studio
 from darkroom.imaging import Adjustments, PREVIEW_PIXELS, jpeg, render, resize_preview
+from darkroom.version import VERSION,editor_url
 
 
 @pytest.fixture
@@ -57,6 +58,18 @@ def test_health_and_page(client):
     assert client.get("/api/health").json()["libraw"] == "0.22.1"
     assert "MyDarkRoom" in client.get("/").text
     assert client.get("/static/app.js").status_code == 200
+
+
+def test_editor_and_all_module_assets_bypass_old_http_cache(client):
+    page=client.get(editor_url("http://testserver"))
+    assert page.headers["Cache-Control"]=="no-store"
+    assert f'/static/{VERSION}/app.js' in page.text and f'/static/{VERSION}/style.css' in page.text
+    for asset in ["app.js","edit-save.js","gpu.js","geometry.js","histogram-worker.js","style.css"]:
+        result=client.get(f"/static/{VERSION}/{asset}")
+        assert result.status_code==200 and result.headers["Cache-Control"]=="no-store"
+        assert client.get('/static/'+asset).headers["Cache-Control"]=="no-store"
+    missing=client.get(f"/static/{VERSION}/missing.js")
+    assert missing.status_code==404 and missing.headers["Cache-Control"]=="no-store"
 
 
 def test_invalid_uploads_are_cleaned_up(client):

@@ -7,6 +7,7 @@ import time
 import pytest
 from darkroom.native_export import NativeApi,export_options
 from darkroom.desktop import Runtime
+from darkroom.version import editor_url
 
 
 @pytest.mark.parametrize('name',['../x.jpg','a/b.jpg','NUL.jpg','com1.txt','x.jpg.','bad?.jpg',''])
@@ -52,4 +53,17 @@ def test_shutdown_waits_for_native_export_without_blocking_window(tmp_path):
             before=time.monotonic();runtime.stop()
             assert time.monotonic()-before<.1 and not runtime.server.should_exit
         runtime._stop_thread.join(2);assert runtime.server.should_exit
+    finally:runtime.cleanup()
+
+
+def test_versioned_native_editor_url_preserves_strict_origin_check(tmp_path):
+    runtime=Runtime(tmp_path,0)
+    try:
+        assert runtime.editor_url==editor_url(runtime.url)
+        current=[runtime.editor_url]
+        api=NativeApi(runtime);api._window=SimpleNamespace(get_current_url=lambda:current[0])
+        api._trusted()
+        for url in [runtime.url+'/other?v=0.13.2',runtime.editor_url+'&foreign=1','https://example.com/?v=0.13.2']:
+            current[0]=url
+            with pytest.raises(PermissionError):api._trusted()
     finally:runtime.cleanup()

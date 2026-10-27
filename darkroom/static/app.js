@@ -26,7 +26,7 @@ let interacting=false,geometryRenderedRevision=-1;
 let structureDetailAbort,structureAbort,structurePromise,structurePhoto,structureTimer,structureDetailKey="";
 let cpuRenderedRevision=-1;
 let cpuRunning = false, histogramRunning = false, detailAbort;
-const worker = new Worker("/static/histogram-worker.js");
+const worker = new Worker(new URL("./histogram-worker.js",import.meta.url));
 
 function error(message) { $("error-text").textContent = message; $("raw-help").hidden=!/DNG/i.test(message); $("error").hidden = false; }
 function busy(message) { $("busy").hidden = !message; $("busy-text").textContent = message || ""; }

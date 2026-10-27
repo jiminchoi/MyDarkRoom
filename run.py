@@ -7,6 +7,7 @@ import time
 from urllib.error import URLError
 from urllib.request import urlopen
 import webbrowser
+from darkroom.version import editor_url
 
 os.environ.setdefault("OMP_NUM_THREADS", "4")
 
@@ -19,7 +20,7 @@ def open_when_ready(url: str):
             with urlopen(url + "/api/health", timeout=1) as response:
                 health = json.load(response)
             if health.get("status") == "ok" and health.get("rawpy"):
-                webbrowser.open(url)
+                webbrowser.open(editor_url(url))
                 return
         except (URLError, OSError, ValueError):
             pass

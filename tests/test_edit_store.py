@@ -70,6 +70,34 @@ def test_edit_export_import_validates_identity_without_applying_early(fake_raw):
         assert client.post(url+"/import", json=exported).status_code == 422
 
 
+def test_converted_nef_restores_even_when_temporary_dng_bytes_change(monkeypatch):
+    from pathlib import Path
+    from darkroom import raw_support
+    converted=[]
+    monkeypatch.setattr(raw_support,"camera_model",lambda path:"NIKON Z5_2")
+    monkeypatch.setattr(raw_support,"converter_path",lambda:Path("converter.exe"))
+    def convert(command,**kwargs):
+        data=f"DNG generated on open {len(converted)}".encode();converted.append(data)
+        (Path(command[3])/"converted.dng").write_bytes(data)
+        return SimpleNamespace(returncode=0)
+    def native(path,*,preview,metadata):
+        assert path.suffix==".dng"
+        if metadata is not None:metadata.update(width=36,height=24)
+        return np.zeros((24,36,3),dtype=np.uint16)
+    monkeypatch.setattr(raw_support.subprocess,"run",convert)
+    monkeypatch.setattr("darkroom.imaging._develop_native",native)
+    with TestClient(app) as client:
+        first=upload(client)
+        assert first['decoder']=='Adobe DNG → LibRaw'
+        assert first['identity']['sha256']==hashlib.sha256(b'fixture RAW').hexdigest()
+        response=client.put(f"/api/photos/{first['id']}/edits",json={"revision":0,"settings":recipe().model_dump(mode="json")})
+        assert response.status_code==200
+    with TestClient(app) as client:
+        reopened=upload(client,"moved.NEF")
+        assert converted[0]!=converted[1] and reopened['identity']==first['identity']
+        assert reopened['edits']['settings']==recipe().model_dump(mode="json")
+
+
 def test_stale_writer_cannot_overwrite_newer_edits_or_wait_on_raw_lock(fake_raw):
     with TestClient(app) as client:
         first = upload(client);second = upload(client)

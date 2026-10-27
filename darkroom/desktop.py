@@ -19,7 +19,7 @@ from urllib.error import URLError
 from urllib.request import Request,build_opener,ProxyHandler
 import webbrowser
 
-from .version import VERSION
+from .version import VERSION,editor_url
 
 LOG = logging.getLogger("mydarkroom")
 # Local IPC must never pass through an HTTP proxy or send its token off-device.
@@ -103,6 +103,7 @@ def activate_existing(directory,timeout=20):
 
 
 def open_editor(url):
+    url=editor_url(url)
     if os.name=="nt":
         # Edge/Chrome retain File System Access, WebGL2 and the user's normal GPU driver.
         preferred="msedge"
@@ -156,6 +157,9 @@ class Runtime:
         write_json(self.directory/"instance.json",dict(port=self.port,token=self.token,pid=os.getpid(),version=VERSION))
         write_json(self.directory/"preferences.json",{"port":self.port})
         self.thread.start()
+
+    @property
+    def editor_url(self):return editor_url(self.url)
 
     @property
     def ready(self):return bool(self.server and self.server.started and not self.finished.is_set())

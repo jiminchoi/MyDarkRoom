@@ -1,5 +1,12 @@
 # MyDarkRoom
 
+## 0.13.2: 업데이트 후 자동 저장 화면이 나타나지 않는 문제 수정
+
+- 0.13.1 엔진이 실행 중이어도 WebView2의 HTTP 캐시에서 이전 HTML/JavaScript를 불러와 **지금 저장/보정정보 버튼이 없고 자동 저장이 실행되지 않는 상황**을 재현했습니다. 새 프로필 실행만 확인했던 기존 검증에 업데이트 캐시 검사를 추가했습니다.
+- EXE의 편집 화면 시작 주소와 HTML이 참조하는 CSS/JavaScript 주소에 버전을 붙입니다. 상대 모듈과 히스토그램 worker도 같은 버전 경로를 사용하고 HTML/정적 파일은 `no-store`로 제공합니다. 기존 캐시에 새 헤더가 적용되기를 기다리는 방식으로는 이미 저장된 화면을 교체할 수 없으므로 시작 주소도 함께 바꿉니다.
+- `%LOCALAPPDATA%\MyDarkRoom`의 프리셋·보정 기록·WebView2 프로필을 삭제하지 않습니다. 같은 사진의 보정 식별과 RAW/DNG 처리 방식은 그대로입니다. 임시 DNG 내용이 바뀌어도 원본 NEF 기준으로 복원되는 변환 경로 회귀 검사도 추가했습니다.
+- 기존 앱을 종료하고 새 ZIP 전체를 새 폴더에 풀어 실행하세요. 새 화면에는 **지금 저장 / 보정정보 내보내기 / 불러오기**가 표시됩니다. 소스의 자동 브라우저 실행도 버전이 포함된 시작 주소를 사용합니다.
+
 ## 0.13.1: 사진별 보정 자동 저장·복원
 
 **[자동 저장 지원 Windows EXE 다운로드](https://github.com/jiminchoi/MyDarkRoom/releases/download/v0.13.1/MyDarkRoom-0.13.1-Windows-x64.zip)** · [Windows 검증 보고서](https://github.com/jiminchoi/MyDarkRoom/releases/download/v0.13.1/windows-smoke.json)

@@ -5,6 +5,7 @@ import re
 import secrets
 import tempfile
 import threading
+from .version import editor_url
 
 
 def export_options(options):
@@ -39,7 +40,7 @@ class NativeApi:
 
     def _trusted(self):
         url=self._window.get_current_url() if self._window else None
-        if url not in (self._runtime.url,self._runtime.url+'/') or self._runtime.closing:raise PermissionError('편집 화면에서만 저장할 수 있습니다.')
+        if url not in (self._runtime.url,self._runtime.url+'/',editor_url(self._runtime.url)) or self._runtime.closing:raise PermissionError('편집 화면에서만 저장할 수 있습니다.')
 
     def _dialog(self,*args,**kwargs):
         logging.getLogger('mydarkroom').info('Opening native file dialog')
