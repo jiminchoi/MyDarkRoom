@@ -75,10 +75,12 @@ class NativeApi:
             if directory is None:
                 import webview
                 selected=self._dialog(webview.FileDialog.SAVE,save_filename=name,file_types=('JPEG image (*.jpg;*.jpeg)',))
+                logging.getLogger('mydarkroom').info('Native file dialog finished (selected=%s)',bool(selected))
                 if not selected:return {'cancelled':True}
                 target=Path(selected[0]).resolve()
                 if target.suffix.lower() not in ('.jpg','.jpeg'):target=target.with_name(target.name+'.jpg')
             if self._runtime.closing:return {'cancelled':True}
+            logging.getLogger('mydarkroom').info('Rendering native JPEG')
             data=self._runtime.app.state.studio.image(photo_id,adjustments,full=True,long_edge=values['longEdge'],dpi=values['dpi'],quality=values['quality'])
             if directory is not None:target=save_unique(directory,name,data)
             else:
@@ -89,4 +91,5 @@ class NativeApi:
                     pending.replace(target)
                 finally:
                     if pending:pending.unlink(missing_ok=True)
+            logging.getLogger('mydarkroom').info('Native JPEG saved')
             return {'cancelled':False,'filename':target.name,'folder':target.parent.name}

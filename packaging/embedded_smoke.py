@@ -60,7 +60,13 @@ def verify(process,profile,url,port,nef,work):
         assert filename is not None,[(e.control_id(),e.window_text()) for e in edits]
         filename.set_edit_text(str(output))
         dialog.child_window(control_id=1).click()
-        page.wait_for_function("document.getElementById('status').textContent.includes('저장 완료')",timeout=120000)
+        try:page.wait_for_function("document.getElementById('status').textContent.includes('저장 완료')",timeout=120000)
+        except Exception as exc:
+            windows=[]
+            for win in Desktop(backend='win32').windows(process=process.pid):
+                controls=[(c.class_name(),c.control_id(),c.window_text()) for c in win.descendants() if c.class_name() in ('Edit','Button','Static')]
+                windows.append((win.class_name(),win.window_text(),controls))
+            raise AssertionError(f"JPEG save did not complete. Output={output.exists()}; status={page.locator('#status').inner_text()}; error={page.locator('#error').inner_text()}; busy={page.locator('#busy').is_visible()}; js_errors={errors}; windows={windows}") from exc
         with Image.open(output) as image:
             image.load();assert max(image.size)==2000 and image.info['dpi']==(240,240) and image.info['icc_profile']
         page.wait_for_function("document.getElementById('edit-save-status').dataset.state==='saved'",timeout=30000)
