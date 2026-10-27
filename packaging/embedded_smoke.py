@@ -24,7 +24,9 @@ def verify(process,profile,url,port,nef,work):
         upgrade_checks=verify_upgrade(page,url,VERSION)
         page.goto(editor_url(url))
         page.on('pageerror',lambda e:errors.append(str(e)))
-        page.on('request',lambda r:requests.append(r.url) if '/api/photos/' in r.url else None)
+        # Idle persistence is expected; slider performance must not regenerate
+        # image/mask fields. Do not count a legitimate delayed edit write as one.
+        page.on('request',lambda r:requests.append(r.url) if '/api/photos/' in r.url and not (r.method=='PUT' and r.url.endswith('/edits')) else None)
         page.wait_for_function("window.pywebview?.api?.export_jpeg && document.querySelectorAll('details.category').length===9",timeout=60000)
         def open_panels():return page.locator('details.category').evaluate_all("es=>es.filter(e=>e.open).map(e=>e.dataset.category)")
         assert open_panels()==['빛']
@@ -44,7 +46,7 @@ def verify(process,profile,url,port,nef,work):
         page.wait_for_function("document.getElementById('preview').dataset.localReady==='true'",timeout=90000)
         page.wait_for_load_state('networkidle',timeout=60000);before=len(requests)
         for value in [-70,0,40,70]:adjust('local-texture',value);adjust('local-sharpness',value)
-        page.wait_for_timeout(500);assert len(requests)==before,'Local strength changes sent server requests'
+        page.wait_for_timeout(500);assert len(requests)==before,f'Local strength changes regenerated image data: {requests[before:]}'
         page.locator('#zoom').click();page.wait_for_function("document.getElementById('preview').dataset.localDetailReady==='true'",timeout=90000)
         adjust('zoom-scale',200);page.wait_for_timeout(300)
         assert json.loads(page.locator('#preview').get_attribute('data-view'))['scale']==2
@@ -106,4 +108,4 @@ def verify(process,profile,url,port,nef,work):
         assert not (profile/'instance.json').exists() and not list((profile/'cache').glob('mydarkroom-*'))
         closed=json.loads(stored[0].read_text(encoding='utf-8'))
         assert closed['settings']['exposure']==.57 and closed['settings']['masks']==saved['settings']['masks']
-    return upgrade_checks+['embedded WebView2 page and JS bridge','Light-only startup with stale saved panels','WebGL2 renderer','native file input NEF upload','crop and 200% zoom/pan','cached local spatial sliders without requests','real native Save As JPEG/DPI/ICC','native window close and engine/cache cleanup','persistent embedded profile','photo edit auto-save outside disposable cache','renamed NEF restores geometry and local spatial masks','dirty native close flushes edits before engine shutdown']
+    return upgrade_checks+['embedded WebView2 page and JS bridge','Light-only startup with stale saved panels','WebGL2 renderer','native file input NEF upload','crop and 200% zoom/pan','cached local spatial sliders without image requests','real native Save As JPEG/DPI/ICC','native window close and engine/cache cleanup','persistent embedded profile','photo edit auto-save outside disposable cache','renamed NEF restores geometry and local spatial masks','dirty native close flushes edits before engine shutdown']
