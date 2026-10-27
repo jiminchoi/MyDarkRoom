@@ -2,6 +2,7 @@
 import html
 import logging
 import os
+import threading
 from .native_export import NativeApi
 from .desktop import read_json,write_json
 
@@ -23,7 +24,7 @@ class Launcher:
         if not webview2_available():
             raise RuntimeError('Microsoft Edge WebView2 Runtime이 필요합니다. https://go.microsoft.com/fwlink/p/?LinkId=2124703')
         import webview
-        self.webview=webview;self.runtime=runtime;self.loaded=False
+        self.webview=webview;self.runtime=runtime;self.loaded=False;self.saving=False
         webview.settings['ALLOW_DOWNLOADS']=True
         webview.settings['ALLOW_FILE_URLS']=False
         webview.settings['OPEN_DEVTOOLS_IN_DEBUG']=False
@@ -41,7 +42,24 @@ class Launcher:
 
     def close(self):
         if self.runtime.finished.is_set():return True
-        self.runtime.stop();self.window.set_title('MyDarkRoom · 작업과 임시 파일 정리 중…')
+        if self.saving or self.runtime.closing:return False
+        if not self.loaded:self.runtime.stop();return False
+        self.saving=True;self.window.set_title('MyDarkRoom · 보정정보 저장 중…')
+        # Closing events run on the GUI thread. Wait for the JS promise on a
+        # worker, so WebView2 and the local save endpoint can keep responding.
+        def flush_and_stop():
+            try:
+                completed=threading.Event();result=[]
+                def done(value):result.append(value);completed.set()
+                self.window.evaluate_js('window.mydarkroomFlushEdits ? window.mydarkroomFlushEdits() : Promise.resolve({ok:true})',callback=done)
+                if not completed.wait(30) or not result or not isinstance(result[0],dict) or not result[0].get('ok'):
+                    raise RuntimeError('Photo edits were not saved; the editor remains open')
+                self.runtime.stop();self.window.set_title('MyDarkRoom · 작업과 임시 파일 정리 중…')
+            except Exception:
+                logging.exception('Could not flush edits before close')
+                self.window.set_title('MyDarkRoom · 보정정보 저장 실패 · 다시 저장해 주세요')
+            finally:self.saving=False
+        threading.Thread(target=flush_and_stop,name='MyDarkRoom-save-on-close',daemon=True).start()
         return False
 
     def monitor(self):

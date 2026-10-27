@@ -6,6 +6,7 @@ let geometryEditor;
 import { MaskEditor } from "./masks.js";
 import {LocalSpatial,hasLocalSpatial} from "./local-spatial.js";
 import {ExportDialog,saveToDirectory} from "./export.js";
+import {EditSaver} from "./edit-save.js";
 let maskEditor, maskBusy=false, appliedMaskKey="[]", maskTimer, maskGeneration=0, maskAbort;
 let maskRequestRunning=false;
 let overlayTimer, overlayGeneration=0, overlayAbort, overlayKey="",overlayPendingKey="";
@@ -17,6 +18,7 @@ const defaults = {...Object.fromEntries(inputs.map((input) => [input.id, Number(
 const settings = (includeMasks=true) => ({curve_points:customCurve ? structuredClone(customCurve) : null,...Object.fromEntries(inputs.map((input) => [input.id, Number(input.value)])), monochrome:$("monochrome").checked,geometry:geometryEditor?.value || geometryDefaults(),masks:includeMasks ? maskEditor?.masks || [] : []});
 let canvas = $("preview"), gpu, context;
 let photo = null, opening = false, exporting = false, comparing = false, split = false;
+let closeSaving=false;
 let zoomScale=1,zoomInteracting=false,panSpace=false,detailCache=null;
 let mode = "fit", pan = [0,0], detail = null, cpuOriginal = null, cpuEdited = null;
 let revision = 0, detailRevision = 0, editTimer, detailTimer, histogramTimer, frame, outputFrame;
@@ -29,17 +31,23 @@ const worker = new Worker("/static/histogram-worker.js");
 function error(message) { $("error-text").textContent = message; $("raw-help").hidden=!/DNG/i.test(message); $("error").hidden = false; }
 function busy(message) { $("busy").hidden = !message; $("busy-text").textContent = message || ""; }
 function status(message) { $("status").textContent = message; }
+const editSaver=new EditSaver({getSettings:settings,onError:error,onState:state=>{
+ const label=$("edit-save-status");label.dataset.state=state;
+ label.textContent=({ready:"사진별 보정 자동 저장",dirty:"변경사항 있음 · 잠시 후 자동 저장",saving:"보정정보 저장 중…",saved:"보정정보 저장됨",error:"자동 저장 실패 · 다시 저장해 주세요"})[state];
+}});
 function availability() {
-  $("controls").disabled = $("preset-tools").disabled = !photo || opening || exporting;
-  if (maskEditor) $("mask-tools").disabled=!photo || opening || exporting;
-  if(geometryEditor){$("geometry-tools").disabled=!photo||opening||exporting;$("mask-tools").disabled ||= geometryEditor.active&&geometryEditor.editing;}
+  const locked=!photo||opening||exporting||closeSaving;
+  $("controls").disabled = $("preset-tools").disabled = locked;
+  if (maskEditor) $("mask-tools").disabled=locked;
+  if(geometryEditor){$("geometry-tools").disabled=locked;$("mask-tools").disabled ||= geometryEditor.active&&geometryEditor.editing;}
   historyButtons();
-  for (const id of ["reset","compare","export","fit","zoom","split"]) $(id).disabled = !photo || opening || exporting;
+  for (const id of ["reset","compare","export","fit","zoom","split"]) $(id).disabled = locked;
   $("zoom").disabled ||= Boolean(geometryEditor?.active&&geometryEditor.editing);
-  $("zoom-scale").disabled=!photo||opening||exporting||Boolean(geometryEditor?.active&&geometryEditor.editing);
+  $("zoom-scale").disabled=locked||Boolean(geometryEditor?.active&&geometryEditor.editing);
   $("export").disabled ||= maskBusy;
-  $("split-position").disabled = !photo || opening || exporting;
-  $("open").disabled = $("choose").disabled = opening || exporting;
+  $("split-position").disabled = locked;
+  $("open").disabled = $("choose").disabled = opening || exporting || closeSaving;
+  for(const id of ["edit-save","edit-export","edit-import"])$(id).disabled=locked;
 }
 async function checked(response) {
   if (!response.ok) {
@@ -195,9 +203,12 @@ function resize() {
 new ResizeObserver(resize).observe($("canvas"));
 
 async function openFile(file) {
-  if (!file || opening || exporting) return;
+  if (!file || opening || exporting || closeSaving) return;
   if (!/\.nef$/i.test(file.name)) return error("니콘 NEF 파일을 선택해 주세요.");
   if (file.size > 256*1024*1024) return error("사진 한 장의 최대 크기는 256 MB입니다.");
+  opening=true;availability();
+  try {await editSaver.flush();}
+  catch(e){error(e.message);opening=false;availability();$("file").value="";return;}
   clearTimeout(structureTimer);structureAbort?.abort();structurePromise=null;structurePhoto=null;delete canvas.dataset.structureReady;$("spatial-status").hidden=true;
   opening = true;localSpatial.reset(); revision++; clearTimeout(editTimer); clearDetail(); availability();
   $("error").hidden = true; busy("NEF를 열고 400만 화소 미리보기를 준비하고 있어요…");
@@ -216,15 +227,18 @@ async function openFile(file) {
     clearTimeout(maskTimer);clearTimeout(overlayTimer);overlayGeneration++;overlayAbort?.abort();
     maskEditor.masks=[];maskEditor.setOverlay(null);overlayKey="";overlayPendingKey="";appliedMaskKey="[]";maskGeneration++;maskAbort?.abort();maskBusy=false;
     geometryEditor.clear();
-    setControls(defaults); history=[settings()]; historyIndex=0; $("preset").value="base"; updateOutputs();
+    setControls(next.edits.settings || defaults);$("mask-draw").checked=false;
+    editSaver.attach(next);history=[settings()]; historyIndex=0; $("preset").value=next.edits.settings?"":"base"; updateOutputs();
     $("empty").hidden = true; canvas.hidden = false;$("mask-overlay").hidden=false;
     $("filename").textContent = next.filename;
     $("dimensions").textContent = `${next.width} × ${next.height} · 미리보기 ${(next.preview_width*next.preview_height/1e6).toFixed(1)}MP`;
-    updateViewButtons(); resize(); status("준비됐어요 · 원본은 안전하게"); scheduleHistogram();structureTimer=setTimeout(()=>ensureStructure(true),700);
+    updateViewButtons();resize();scheduleEdits();status(next.edits.settings?"저장한 보정을 복원했어요":"준비됐어요 · 원본은 안전하게");scheduleHistogram();structureTimer=setTimeout(()=>ensureStructure(true),700);
+    if(next.edits.warning)error(next.edits.warning);
   } catch (e) { error(e.message); }
   finally { opening = false;syncLocal(); busy(null); availability(); $("file").value=""; }
 }
 function scheduleEdits(event) {
+  if(photo&&!opening)editSaver.mark();
   if(!gpu&&detail)clearDetail();
   if (event?.target?.id.startsWith("curve_")) {customCurve=null;constrainCurve(event.target);}
   syncLocal();ensureStructure();
@@ -466,7 +480,7 @@ function setControls(v) {
  if (Array.isArray(v.masks) && maskEditor) maskEditor.masks=v.masks;
 }
 function historyButtons() {
- const locked=!photo || opening || exporting;
+ const locked=!photo || opening || exporting || closeSaving;
  $("undo").disabled=locked || historyIndex<=0; $("redo").disabled=locked || historyIndex>=history.length-1;
 }
 function record() {
@@ -479,7 +493,7 @@ function record() {
 }
 function applySettings(v) {setControls(v);scheduleEdits();record();}
 function travel(direction) {
- if (!photo || opening || exporting) return;
+ if (!photo || opening || exporting || closeSaving) return;
  record();
  const index=historyIndex+direction;
  if (index<0 || index>=history.length) return;
@@ -509,6 +523,39 @@ $("delete-preset").onclick=()=>{
  if (persist(custom.filter(p=>p.id!==id))) listPresets();
 };
 listPresets("base");
+
+$("edit-save").onclick=async()=>{try{await editSaver.flush();}catch(e){error(e.message);}};
+$("edit-export").onclick=async()=>{
+ if(!photo||opening||exporting||closeSaving)return;
+ const id=photo.id,name=photo.filename.replace(/\.nef$/i,"");
+ try{
+  const response=await postImage(id,"edits/export",settings());
+  const url=URL.createObjectURL(await response.blob()),link=document.createElement("a");
+  link.href=url;link.download=name+".mydarkroom.json";document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
+ }catch(e){error(e.message);}
+};
+$("edit-import").onclick=()=>$("edit-import-file").click();
+$("edit-import-file").onchange=async()=>{
+ const file=$("edit-import-file").files[0];if(!file||!photo||opening||exporting||closeSaving)return;
+ const id=photo.id,version=revision;
+ try{
+  if(file.size>4*1024*1024)throw new Error("보정정보 파일은 최대 4 MB입니다.");
+  const response=await checked(await fetch(`/api/photos/${id}/edits/import`,{method:"POST",headers:{"Content-Type":"application/json"},body:await file.text()}));
+  const data=await response.json();
+  if(photo?.id!==id||revision!==version)throw new Error("사진의 편집 상태가 바뀌었습니다. 보정정보를 다시 불러와 주세요.");
+  geometryEditor.clear();$("mask-draw").checked=false;mode="fit";pan=[0,0];clearDetail();applySettings(data.settings);updateViewButtons();
+  await editSaver.flush();status("보정정보를 불러와 저장했습니다");
+ }catch(e){error(e.message);}finally{$("edit-import-file").value="";}
+};
+window.mydarkroomFlushEdits=async()=>{
+ closeSaving=true;availability();
+ try{await editSaver.flush();return {ok:true};}
+ catch(e){error(e.message);return {ok:false,error:e.message};}
+ finally{closeSaving=false;availability();}
+};
+window.addEventListener("beforeunload",event=>{
+ if(editSaver.dirty||editSaver.running){editSaver.flush().catch(()=>{});event.preventDefault();event.returnValue="";}
+});
 
 $("preset-export").onclick=()=>{
  const data={version:1,presets:custom};

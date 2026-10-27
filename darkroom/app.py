@@ -5,6 +5,8 @@ from tempfile import TemporaryDirectory
 import threading
 import time
 import os
+import hashlib
+import logging
 from uuid import uuid4
 from io import BytesIO
 from PIL import Image
@@ -22,6 +24,8 @@ from .structure import packed,packed_sharpness
 from .masking import bake_masks, mask_weight,brush_grid,packed_weights
 from .raw_support import RawCompatibilityError,converter_path
 from .version import VERSION
+from .desktop import profile_path
+from .edit_store import EditStore, EditError, EditConflict, PhotoIdentity, EditUpdate, SavedEdit, MAX_EDIT_BYTES, exported_edit
 
 STATIC = Path(__file__).parent / "static"
 MAX_UPLOAD = 256 * 1024 * 1024
@@ -36,6 +40,7 @@ class Photo:
     touched: float
     width: int
     height: int
+    identity: PhotoIdentity
 
 
 class Studio:
@@ -45,7 +50,7 @@ class Studio:
         # Serialize LibRaw work and protect against eviction during export.
         self.lock = threading.Lock()
 
-    def open(self, path: Path, filename: str) -> dict:
+    def open(self, path: Path, filename: str, fingerprint: str | None = None, size: int | None = None) -> dict:
         with self.lock:
             try:
                 metadata = {}
@@ -60,8 +65,13 @@ class Studio:
             photo_id = uuid4().hex
             width = metadata.get("width", preview.shape[1])
             height = metadata.get("height", preview.shape[0])
-            self.photos[photo_id] = Photo(path, filename, preview, time.monotonic(), width, height)
+            if fingerprint is None:
+                with path.open("rb") as source:
+                    fingerprint = hashlib.file_digest(source, "sha256").hexdigest()
+            identity = PhotoIdentity(sha256=fingerprint, size=size or path.stat().st_size, width=width, height=height)
+            self.photos[photo_id] = Photo(path, filename, preview, time.monotonic(), width, height, identity)
             return {"id": photo_id, "filename": filename,
+                    "identity": identity.model_dump(),
                     "width": width, "height": height,
                     "decoder":metadata.get("decoder","LibRaw"),
                     "preview_width": preview.shape[1], "preview_height": preview.shape[0]}
@@ -156,6 +166,7 @@ class Studio:
 async def lifespan(app: FastAPI):
     with TemporaryDirectory(prefix="mydarkroom-",dir=os.environ.get("MYDARKROOM_CACHE_DIR")) as directory:
         app.state.studio = Studio(Path(directory))
+        app.state.edits = EditStore(Path(os.environ.get("MYDARKROOM_DATA_DIR") or profile_path()) / "edits")
         try:
             yield
         finally:
@@ -197,15 +208,18 @@ async def upload(request: Request, file: UploadFile):
         if not filename.lower().endswith(".nef"):
             raise HTTPException(415, "NEF 파일만 열 수 있습니다.")
         total = 0
+        digest = hashlib.sha256()
         with path.open("xb") as output:
             while chunk := await file.read(1024 * 1024):
                 total += len(chunk)
                 if total > MAX_UPLOAD:
                     raise HTTPException(413, "사진 한 장의 최대 크기는 256 MB입니다.")
                 output.write(chunk)
+                digest.update(chunk)
         if total == 0:
             raise HTTPException(422, "빈 파일입니다.")
-        result = await run_in_threadpool(request.app.state.studio.open, path, filename)
+        result = await run_in_threadpool(request.app.state.studio.open, path, filename, digest.hexdigest(), total)
+        result["edits"] = await run_in_threadpool(load_edits, request.app, PhotoIdentity.model_validate(result["identity"]))
         accepted = True
         return result
     finally:
@@ -213,6 +227,74 @@ async def upload(request: Request, file: UploadFile):
         if not accepted:
             path.unlink(missing_ok=True)
             path.with_suffix(".dng").unlink(missing_ok=True)
+
+
+def load_edits(application, identity):
+    try:
+        saved, warning = application.state.edits.load(identity)
+        return {"revision": saved.revision if saved else 0, "settings": saved.settings.model_dump(mode="json") if saved else None,
+                "saved_at": saved.saved_at if saved else None, "warning": warning, "writable": True}
+    except (EditError, OSError):
+        logging.getLogger("mydarkroom").exception("Could not read saved photo edits")
+        return {"revision": 0, "settings": None, "writable": False,
+                "warning": "보정정보를 읽지 못했습니다. 기존 저장본을 보호하기 위해 자동 저장을 중지했습니다. 보정정보 파일 내보내기는 가능합니다."}
+
+
+def edit_identity(request, photo_id):
+    studio = request.app.state.studio
+    # Identity is immutable. A captured Photo remains safe even if its RAW cache
+    # is evicted concurrently; edit writes must not queue behind RAW export.
+    photo = studio.photos.get(photo_id)
+    if photo is None:
+        raise HTTPException(404, "사진 세션이 만료되었습니다. NEF를 다시 열어 주세요.")
+    return photo.identity
+
+
+async def edit_payload(request, model):
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > MAX_EDIT_BYTES:
+            raise HTTPException(413, "보정정보 파일은 최대 4 MB입니다.")
+        data.extend(chunk)
+    try:
+        return await run_in_threadpool(model.model_validate_json, data)
+    except ValueError as exc:
+        raise HTTPException(422, "지원하지 않거나 손상된 보정정보입니다.") from exc
+
+
+@app.put("/api/photos/{photo_id}/edits")
+async def save_edits(photo_id: str, request: Request):
+    update = await edit_payload(request, EditUpdate)
+    identity = await run_in_threadpool(edit_identity, request, photo_id)
+    try:
+        saved = await run_in_threadpool(request.app.state.edits.save, identity, update)
+        return {"revision": saved.revision, "saved_at": saved.saved_at}
+    except EditConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except (EditError, OSError) as exc:
+        logging.getLogger("mydarkroom").exception("Could not save photo edits")
+        raise HTTPException(503, "보정정보를 저장하지 못했습니다. 저장 공간·폴더 권한을 확인하고 다시 저장해 주세요.") from exc
+
+
+@app.get("/api/photos/{photo_id}/edits")
+def get_edits(photo_id: str, request: Request):
+    return load_edits(request.app, edit_identity(request, photo_id))
+
+
+@app.post("/api/photos/{photo_id}/edits/export")
+async def export_edits(photo_id: str, request: Request):
+    settings = await edit_payload(request, Adjustments)
+    identity = await run_in_threadpool(edit_identity, request, photo_id)
+    return exported_edit(identity, settings).model_dump(mode="json")
+
+
+@app.post("/api/photos/{photo_id}/edits/import")
+async def import_edits(photo_id: str, request: Request):
+    saved = await edit_payload(request, SavedEdit)
+    identity = await run_in_threadpool(edit_identity, request, photo_id)
+    if saved.photo != identity:
+        raise HTTPException(422, "이 NEF의 보정정보가 아닙니다. 원본이 같은 사진의 보정정보 파일을 선택해 주세요.")
+    return {"settings": saved.settings.model_dump(mode="json")}
 
 
 @app.post("/api/photos/{photo_id}/preview")

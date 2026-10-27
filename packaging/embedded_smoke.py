@@ -63,10 +63,26 @@ def verify(process,profile,url,port,nef,work):
         page.wait_for_function("document.getElementById('status').textContent.includes('저장 완료')",timeout=120000)
         with Image.open(output) as image:
             image.load();assert max(image.size)==2000 and image.info['dpi']==(240,240) and image.info['icc_profile']
+        page.wait_for_function("document.getElementById('edit-save-status').dataset.state==='saved'",timeout=30000)
+        stored=list((profile/'edits').glob('*.json'));assert len(stored)==1
+        saved=json.loads(stored[0].read_text(encoding='utf-8'))
+        assert saved['settings']['geometry']['rotation']==5
+        assert saved['settings']['masks'][0]['adjustments']['sharpness']==70
+        page.reload();page.wait_for_function("window.pywebview?.api?.export_jpeg && document.querySelectorAll('details.category').length===9",timeout=60000)
+        assert open_panels()==['빛']
+        page.locator('#file').set_input_files({'name':'renamed.NEF','mimeType':'application/octet-stream','buffer':Path(nef).read_bytes()})
+        page.wait_for_function("!document.getElementById('controls').disabled",timeout=90000)
+        assert page.locator('#geo-rotation').input_value()=='5'
+        assert page.locator('#local-sharpness').input_value()=='70'
+        assert not page.locator('#mask-draw').is_checked()
+        page.wait_for_function("document.getElementById('preview').dataset.localReady==='true'",timeout=90000)
         assert not errors,errors
         assert page.locator('#error').is_hidden(),page.locator('#error').inner_text()
-        # Actual native close button path, including asynchronous engine/cache cleanup.
+        # Close immediately after a new adjustment, before the idle-save deadline.
+        adjust('exposure',.57)
         Desktop(backend='win32').window(process=process.pid,title_re='MyDarkRoom.*').close()
         assert process.wait(timeout=45)==0
         assert not (profile/'instance.json').exists() and not list((profile/'cache').glob('mydarkroom-*'))
-    return ['embedded WebView2 page and JS bridge','Light-only startup with stale saved panels','WebGL2 renderer','native file input NEF upload','crop and 200% zoom/pan','cached local spatial sliders without requests','real native Save As JPEG/DPI/ICC','native window close and engine/cache cleanup','persistent embedded profile']
+        closed=json.loads(stored[0].read_text(encoding='utf-8'))
+        assert closed['settings']['exposure']==.57 and closed['settings']['masks']==saved['settings']['masks']
+    return ['embedded WebView2 page and JS bridge','Light-only startup with stale saved panels','WebGL2 renderer','native file input NEF upload','crop and 200% zoom/pan','cached local spatial sliders without requests','real native Save As JPEG/DPI/ICC','native window close and engine/cache cleanup','persistent embedded profile','photo edit auto-save outside disposable cache','renamed NEF restores geometry and local spatial masks','dirty native close flushes edits before engine shutdown']

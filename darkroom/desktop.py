@@ -152,6 +152,7 @@ class Runtime:
 
     def start(self):
         cache=self.directory/"cache";clean_cache(cache);os.environ["MYDARKROOM_CACHE_DIR"]=str(cache)
+        os.environ["MYDARKROOM_DATA_DIR"]=str(self.directory)
         write_json(self.directory/"instance.json",dict(port=self.port,token=self.token,pid=os.getpid(),version=VERSION))
         write_json(self.directory/"preferences.json",{"port":self.port})
         self.thread.start()

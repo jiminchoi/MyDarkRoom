@@ -168,7 +168,14 @@ def run(args):
                 with socket.socket() as occupied:
                     occupied.bind(("127.0.0.1",0));occupied.listen();busy=occupied.getsockname()[1]
                     process,state,url,_=start("--headless","--port",str(busy))
-                    assert state['port']!=busy;stop(process,state,url)
+                    assert state['port']!=busy
+                    if args.gui:
+                        resumed=client.post(url+'/api/photos',files={'file':('새 위치.NEF',args.nef.read_bytes(),'application/octet-stream')})
+                        assert resumed.status_code==200,resumed.text
+                        assert resumed.json()['edits']['settings']['exposure']==.57
+                        assert resumed.json()['edits']['settings']['masks'][0]['adjustments']['sharpness']==70
+                        report['checks'].append('edit restore across EXE restart and port change')
+                    stop(process,state,url)
                     report['checks'].append('occupied port fallback')
                 after={str(p.relative_to(bundle)):p.stat().st_size for p in bundle.rglob("*") if p.is_file()}
                 assert before==after,"Application wrote inside the installation folder"
