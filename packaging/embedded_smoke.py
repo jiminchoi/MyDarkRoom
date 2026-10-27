@@ -55,6 +55,9 @@ def verify(process,profile,url,port,nef,work):
         except Exception as exc:
             windows=[(w.process_id(),w.class_name(),w.window_text()) for w in Desktop(backend='win32').windows()]
             raise AssertionError(f"Save dialog missing. Status={page.locator('#status').inner_text()}; error={page.locator('#error').inner_text()}; windows={windows}") from exc
+        # Keep the Save button on the CI desktop even when the editor is larger
+        # than its display. This changes the test dialog position only.
+        dialog.move_window(x=0,y=0,width=900,height=650)
         edits=dialog.descendants(class_name='Edit')
         filename=next((e for e in edits if e.control_id() in (1001,1148)),None)
         assert filename is not None,[(e.control_id(),e.window_text()) for e in edits]
