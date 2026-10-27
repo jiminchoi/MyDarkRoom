@@ -58,9 +58,17 @@ def verify(process,profile,url,port,nef,work):
         edits=dialog.descendants(class_name='Edit')
         filename=next((e for e in edits if e.control_id() in (1001,1148)),None)
         assert filename is not None,[(e.control_id(),e.window_text()) for e in edits]
-        filename.set_edit_text(str(output))
-        dialog.child_window(control_id=1).click()
-        try:page.wait_for_function("document.getElementById('status').textContent.includes('저장 완료')",timeout=120000)
+        dialog.set_focus();filename.set_edit_text(str(output))
+        # A synthesized WM_CLICK can leave the common dialog's autocomplete
+        # popup active. Use real pointer input and verify that Save As closes.
+        for attempt in range(3):
+            dialog.child_window(control_id=1).click_input()
+            try:dialog.wait_not('visible',timeout=3);break
+            except Exception:
+                if attempt==2:raise AssertionError('Native Save As did not close after real Save clicks')
+        # Detail/zoom progress can replace the shared status text after export.
+        # Check the actual export completion and image, not a transient caption.
+        try:page.wait_for_function("document.getElementById('busy').hidden",timeout=120000)
         except Exception as exc:
             windows=[]
             for win in Desktop(backend='win32').windows(process=process.pid):

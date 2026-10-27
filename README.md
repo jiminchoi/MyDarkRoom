@@ -1,6 +1,8 @@
 # MyDarkRoom
 
-## 0.13.0: 사진별 보정 자동 저장·복원
+## 0.13.1: 사진별 보정 자동 저장·복원
+
+**[자동 저장 지원 Windows EXE 다운로드](https://github.com/jiminchoi/MyDarkRoom/releases/download/v0.13.1/MyDarkRoom-0.13.1-Windows-x64.zip)** · [Windows 검증 보고서](https://github.com/jiminchoi/MyDarkRoom/releases/download/v0.13.1/windows-smoke.json)
 
 - 슬라이더·흑백·그레인·톤커브·크롭/기하·마스크(브러시 획과 변환 좌표, 거리별 농도, 국소 보정 포함)를 `%LOCALAPPDATA%\MyDarkRoom\edits`에 저장합니다. 원본 NEF나 사진 옆 폴더에는 쓰지 않습니다. 같은 NEF를 다시 열면 자동 복원하고, 패널은 계속 빛만 펼칩니다. 실행 취소 이력·확대 배율·선택 프리셋 이름은 저장 대상이 아닙니다.
 - 업로드 스트림에서 SHA-256을 계산하므로 식별만을 위한 RAW 재현상/별도 전체 읽기가 없습니다. 원본 내용이 같으면 이름/위치 변경에도 복원하며, 내용이 바뀐 RAW는 별개 사진입니다. 같은 원본의 복사본은 보정정보를 공유합니다.

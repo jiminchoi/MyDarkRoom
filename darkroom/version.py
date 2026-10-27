@@ -1,2 +1,2 @@
 """Single application version shared by the API and Windows bundle."""
-VERSION = "0.13.0"
+VERSION = "0.13.1"
